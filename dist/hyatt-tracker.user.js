@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hyatt Card Elite Night Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.0.2
+// @version      1.0.3
 // @description  Tracks World of Hyatt personal and business card spend toward elite-night thresholds locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -1447,10 +1447,10 @@ function setupNarrative(metric) {
   const earliest = metric.coverage.earliest;
   const gap = metric.openingGapDays;
   if (!earliest) return 'No posted transaction was captured yet. A card can still have complete history with zero purchases.';
-  if (!Number.isFinite(gap)) return `The oldest captured transaction is ${escapeHtml(earliest)}. Enter the date this card began earning the current Hyatt benefits.`;
+  if (!Number.isFinite(gap)) return `The oldest captured transaction is ${escapeHtml(earliest)}. Enter when this card began earning the current Hyatt benefits.`;
   if (gap < 0) return `Captured activity begins before the entered Hyatt benefit date. Transactions before that date will be ignored.`;
-  if (gap <= 60) return `The first captured transaction is ${gap} day${gap === 1 ? '' : 's'} after the Hyatt benefit start date. That is within the normal first-purchase setup window.`;
-  return `The first captured transaction is ${gap} days after the Hyatt benefit start date. Confirm there really were no earlier qualifying purchases, or use a Chase baseline.`;
+  if (gap <= 60) return `The first captured transaction is ${gap} day${gap === 1 ? '' : 's'} after the current Hyatt benefits began. That is within the normal first-purchase setup window.`;
+  return `The first captured transaction is ${gap} days after the current Hyatt benefits began. Confirm there really were no earlier qualifying purchases, or use a Chase baseline.`;
 }
 
 function personalSetup(metric) {
@@ -1461,7 +1461,7 @@ function personalSetup(metric) {
     <h2>Set up …${escapeHtml(metric.account.last4)}</h2>
     <p class="setup-lead">The personal card’s $5,000 counter rolls forward for the life of the card. Choose the strongest starting information you have.</p>
     <form data-setup-form data-account-id="${escapeHtml(metric.account.id)}" data-product-type="personal">
-      <label><span>Hyatt benefit start date</span><input type="date" name="benefitStartDate" value="${escapeHtml(config.benefitStartDate ?? '')}" required></label>
+      <label><span>Current Hyatt benefits began</span><small class="field-help">Usually the date you opened this Hyatt card. If you product-changed or converted into it, use the effective change date instead—not the first-purchase or anniversary date.</small><input type="date" name="benefitStartDate" value="${escapeHtml(config.benefitStartDate ?? '')}" required></label>
       <p class="coverage-summary" data-opening-summary data-earliest="${escapeHtml(metric.coverage.earliest ?? '')}">${setupNarrative(metric)}</p>
       <label><span>Initialization method</span><select name="historyMode">
         <option value="full" ${mode === 'full' ? 'selected' : ''}>Complete transaction history</option>
@@ -1549,7 +1549,7 @@ const STYLES = `
   .detail-review { padding-top:8px; } .detail-heading { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin-bottom:10px; } .detail-heading h2,.setup-view h2,.debug-grid h2 { color:#123e72; } .detail-heading p,.detail-note { color:#68737f; }
   .filter-group { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:7px; } .filter-group.modes { padding-bottom:8px; border-bottom:1px solid #e4e8ec; } .filter-chip { padding:5px 9px; border-radius:999px; } .filter-chip span { display:inline-block; min-width:18px; margin-left:3px; padding:0 5px; border-radius:999px; background:#edf2f7; color:#586674; font-size:10px; } .filter-chip.active { border-color:#0d6374; background:#0d6374; color:#fff; } .filter-chip.active span { background:#ffffff2e; color:#fff; }
   .detail-note { margin:7px 0 9px; font-size:11px; } .detail-empty { padding:30px 16px; border:1px dashed #ccd5df; border-radius:8px; color:#65717c; text-align:center; } .table-wrap { overflow:auto; border:1px solid #dfe3e7; border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:12px; } th { position:sticky; top:0; z-index:1; padding:8px; background:#f1f4f7; color:#44505d; text-align:left; } td { max-width:300px; padding:8px; overflow:hidden; border-top:1px solid #edf0f2; text-overflow:ellipsis; white-space:nowrap; } td.merchant { min-width:200px; } .right { text-align:right; } .credit { color:#28713d; } .card-pill { color:#123e72; font-weight:700; } .verify { display:inline-block; padding:2px 7px; border-radius:999px; font-size:10px; font-weight:700; } .verify.good { background:#e1f1e4; color:#28673a; } .verify.neutral { background:#edf0f2; color:#616970; }
-  .setup-view { max-width:760px; margin:0 auto; padding:8px 0 18px; } .back-link { margin-bottom:10px; padding-left:0; border:0; background:none; color:#0d6374; } .setup-lead { margin:5px 0 16px; color:#626d77; } form { display:grid; gap:12px; } label { display:grid; gap:4px; color:#3f4a54; } label > span:first-child { font-weight:700; } input,select { width:100%; padding:8px 9px; border:1px solid #bec8d2; border-radius:6px; background:#fff; color:#26323d; } .coverage-summary { padding:10px 12px; border-radius:7px; background:#eef6f7; color:#315b63; }
+  .setup-view { max-width:760px; margin:0 auto; padding:8px 0 18px; } .back-link { margin-bottom:10px; padding-left:0; border:0; background:none; color:#0d6374; } .setup-lead { margin:5px 0 16px; color:#626d77; } form { display:grid; gap:12px; } label { display:grid; gap:4px; color:#3f4a54; } label > span:first-child { font-weight:700; } .field-help { margin-bottom:3px; color:#68737f; font-size:11px; font-weight:400; line-height:1.4; } input,select { width:100%; padding:8px 9px; border:1px solid #bec8d2; border-radius:6px; background:#fff; color:#26323d; } .coverage-summary { padding:10px 12px; border-radius:7px; background:#eef6f7; color:#315b63; }
   .mode-panel { display:none; gap:10px; padding:12px; border:1px solid #dce3e7; border-radius:8px; } .mode-panel.active { display:grid; } .method-note { display:flex; justify-content:space-between; gap:15px; padding:9px 11px; border-radius:7px; background:#f1f6f7; } .method-note span { color:#65717c; text-align:right; } .method-note.warn { background:#fff6e6; } .check { grid-template-columns:auto 1fr; align-items:start; gap:8px; } .check input { width:auto; margin-top:3px; } .check span { font-weight:400; } .inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .setup-actions { display:flex; gap:8px; justify-content:flex-end; }
   .debug-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding-top:8px; } .debug-grid section { padding:14px; border:1px solid #e0e4e8; border-radius:8px; } .debug-grid h2 { margin-bottom:8px; font-size:15px; } dl { margin:0; } dl div { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid #edf0f2; } dd { margin:0; font-weight:700; text-align:right; } .action-stack { display:grid; gap:7px; margin-top:10px; } .danger { border-color:#b44; color:#a22; } .wide { grid-column:1/-1; }
   @media (max-width:720px) { .backdrop { padding:8px; } .header { align-items:flex-start; flex-wrap:wrap; } .brand { width:100%; } .controls { width:100%; overflow-x:auto; } .card-title-row,.breakdown,.certificate > div:first-child,.method-note,.detail-heading,.setup-callout,.coverage-note { align-items:flex-start; flex-direction:column; } .nights { text-align:left; } .inline-fields,.debug-grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
@@ -1561,7 +1561,7 @@ function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.0.2</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.0.3</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden>`;
@@ -1648,9 +1648,9 @@ function createHyattTrackerUi(handlers) {
     const first = new Date(`${earliest}T00:00:00Z`);
     if (!summary || !event.target.value || !earliest || Number.isNaN(start.valueOf()) || Number.isNaN(first.valueOf())) return;
     const days = Math.round((first - start) / 86_400_000);
-    summary.textContent = days < 0 ? 'Captured activity begins before this benefit date; earlier transactions will be ignored.'
-      : days <= 60 ? `The first captured transaction is ${days} day${days === 1 ? '' : 's'} after this date—within the normal setup window. Confirm no earlier purchases were made.`
-      : `The first captured transaction is ${days} days after this date. Consider using a Chase baseline unless you are sure there was no earlier spend.`;
+    summary.textContent = days < 0 ? 'Captured activity begins before the current Hyatt benefits began; earlier transactions will be ignored.'
+      : days <= 60 ? `The first captured transaction is ${days} day${days === 1 ? '' : 's'} after the current Hyatt benefits began—within the normal setup window. Confirm no earlier purchases were made.`
+      : `The first captured transaction is ${days} days after the current Hyatt benefits began. Consider using a Chase baseline unless you are sure there was no earlier spend.`;
   });
   root.addEventListener('submit', async (event) => {
     const form = event.target.closest('[data-setup-form]');
