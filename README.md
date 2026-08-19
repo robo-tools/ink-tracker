@@ -54,7 +54,7 @@ Saved banking pages can contain private data, so `chaseHTML/` is gitignored.
 
 ## Updates
 
-Tampermonkey checks the header-only [`dist/ink-tracker.meta.js`](dist/ink-tracker.meta.js) published through GitHub Pages and installs a newer [`dist/ink-tracker.user.js`](dist/ink-tracker.user.js) when its `@version` increases. Development work belongs on `main`; only tested releases should be promoted to `stable`. A GitHub Actions workflow tests and rebuilds the `stable` branch before publishing only the `dist/` directory.
+Tampermonkey checks the header-only [`dist/ink-tracker.meta.js`](dist/ink-tracker.meta.js) published through GitHub Pages and installs a newer [`dist/ink-tracker.user.js`](dist/ink-tracker.user.js) when its `@version` increases. Development work belongs on `main`; only version tags such as `v0.9.7` publish a release. The GitHub Actions workflow tests and rebuilds the tagged commit, verifies that the tag matches the userscript version, and publishes only the `dist/` directory.
 
 Existing installations using the former local-only namespace should be removed before installing the hosted build once. Future versions will then update in place.
 
@@ -64,6 +64,7 @@ Existing installations using the former local-only namespace should be removed b
 npm test
 npm run build
 npm run check
+npm run verify-release -- v0.9.7
 ```
 
 The build uses only Node.js and has no package dependencies.

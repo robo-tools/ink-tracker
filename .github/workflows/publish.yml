@@ -1,10 +1,9 @@
-name: Test and publish stable userscript
+name: Test and publish tagged userscript
 
 on:
   push:
-    branches:
-      - stable
-  workflow_dispatch:
+    tags:
+      - 'v*'
 
 permissions:
   contents: read
@@ -35,6 +34,9 @@ jobs:
 
       - name: Build userscript
         run: node scripts/build.mjs
+
+      - name: Verify release version
+        run: node scripts/verify-release.mjs "$GITHUB_REF_NAME"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
