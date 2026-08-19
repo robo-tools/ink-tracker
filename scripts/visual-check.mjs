@@ -23,5 +23,19 @@ const setup = await page.locator('#hyatt-tracker-root').evaluate((host) => ({
   activePanels: host.shadowRoot.querySelectorAll('.mode-panel.active').length,
   text: host.shadowRoot.querySelector('.body').innerText
 }));
-console.log(JSON.stringify({ errors, summary, setup }, null, 2));
+
+const mobilePage = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+mobilePage.on('pageerror', (error) => errors.push(error.message));
+await mobilePage.goto('http://127.0.0.1:8765/test/fixtures/hyatt-ui-harness.html', { waitUntil: 'networkidle' });
+await mobilePage.locator('#hyatt-tracker-root').evaluate((host) => host.shadowRoot.querySelector('[data-action="open"]').click());
+await mobilePage.waitForTimeout(150);
+await mobilePage.screenshot({ path: 'test/fixtures/hyatt-mobile-render.png', fullPage: true });
+const mobile = await mobilePage.locator('#hyatt-tracker-root').evaluate((host) => ({
+  bodyScrollWidth: host.shadowRoot.querySelector('.body').scrollWidth,
+  bodyClientWidth: host.shadowRoot.querySelector('.body').clientWidth,
+  calloutDirection: getComputedStyle(host.shadowRoot.querySelector('.setup-callout')).flexDirection,
+  setupButtonVisible: Boolean(host.shadowRoot.querySelector('.setup-callout [data-setup]')?.getClientRects().length)
+}));
+
+console.log(JSON.stringify({ errors, summary, setup, mobile }, null, 2));
 await browser.close();

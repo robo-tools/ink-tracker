@@ -8,7 +8,7 @@
     const sampleState = {
       schemaVersion: 2,
       accounts: [
-        { id: 'personal-1234', name: 'World of Hyatt (...1234)', last4: '1234', productId: 'hyatt-personal' },
+        { id: 'personal-1234', name: 'World of Hyatt Credit Card (...1234)', last4: '1234', productId: 'hyatt-personal' },
         { id: 'business-5678', name: 'World of Hyatt Business (...5678)', last4: '5678', productId: 'hyatt-business' }
       ],
       transactions: [
@@ -23,7 +23,6 @@
         'business-5678': { activity: { complete: true, rowCount: 1, earliest: '2026-01-15', latest: '2026-01-15' } }
       },
       cardConfig: {
-        'personal-1234': { productId: 'hyatt-personal', benefitStartDate: '2025-01-20', historyMode: 'full', historyConfirmed: true },
         'business-5678': { productId: 'hyatt-business', yearHistoryConfirmed: 2026 }
       },
       captureStats: { payloads: 4, lastSource: 'chase-dom', lastCapturedAt: '2026-08-19T20:00:00.000Z' },

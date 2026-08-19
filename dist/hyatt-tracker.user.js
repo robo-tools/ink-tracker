@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hyatt Card Elite Night Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.0.0
+// @version      1.0.1
 // @description  Tracks World of Hyatt personal and business card spend toward elite-night thresholds locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -1324,7 +1324,7 @@ function formatUpdated(value) {
 }
 
 function displayAccountName(name) {
-  return String(name ?? 'World of Hyatt card').replace(/\s*\(\.{3}\d{4}\)\s*$/, '').trim();
+  return String(name ?? 'World of Hyatt card').replace(/\s*\((?:\.{3}|…)[\s-]*\d{4}\)\s*$/u, '').trim();
 }
 
 function statusBadge(metric) {
@@ -1357,16 +1357,15 @@ function personalCard(metric) {
       <div><h3>${escapeHtml(displayAccountName(metric.account.name))} <span class="last4">(…${escapeHtml(metric.account.last4)})</span></h3><p>Personal card · rolling lifetime counter</p></div>
       <div class="nights"><strong>${nights}</strong><span>card nights in ${year}</span></div>
     </div>
-    <div class="rule-row"><strong>2 elite nights per $5,000</strong>${statusBadge(metric)}</div>
+    <div class="rule-row"><strong>2 elite nights per $5,000</strong>${statusBadge(metric)}${ready ? `<button class="inline-link" data-setup="${escapeHtml(metric.account.id)}">Edit setup</button>` : ''}</div>
     ${ready ? `${progressBar(metric.progressCents, metric.rule.thresholdCents)}
       <div class="spend-line"><strong>${money(metric.progressCents)}</strong> / ${money(metric.rule.thresholdCents)} toward the next 2 nights · <span class="muted">${money(nextSpend)} remaining</span></div>`
-      : '<div class="setup-callout">Choose how to initialize the rolling $5,000 counter before relying on this total.</div>'}
+      : `<div class="setup-callout"><span>Choose how to initialize the rolling $5,000 counter before relying on this total.</span><button class="primary" data-setup="${escapeHtml(metric.account.id)}">Set up card</button></div>`}
     <div class="breakdown"><span>${escapeHtml(countLabel)}</span><strong>${metric.qualifyingTransactionCount} qualifying transactions</strong></div>
     <div class="certificate">
       <div><strong>Extra Category 1–4 free night${metric.yearHistoryVerified ? '' : ' <em>(coverage unverified)</em>'}</strong><span>${money(freeProgress)} / ${money(metric.annualFreeNightThresholdCents)} calendar-year spend</span></div>
       ${progressBar(freeProgress, metric.annualFreeNightThresholdCents)}
     </div>
-    <div class="card-actions"><button data-setup="${escapeHtml(metric.account.id)}">${ready ? 'Review setup' : 'Set up this card'}</button></div>
   </article>`;
 }
 
@@ -1378,12 +1377,11 @@ function businessCard(metric) {
       <div><h3>${escapeHtml(displayAccountName(metric.account.name))} <span class="last4">(…${escapeHtml(metric.account.last4)})</span></h3><p>Business card · counter resets January 1</p></div>
       <div class="nights"><strong>${metric.cardNightsYtd.toLocaleString()}</strong><span>card nights in ${year}</span></div>
     </div>
-    <div class="rule-row"><strong>5 elite nights per $10,000</strong>${statusBadge(metric)}</div>
+    <div class="rule-row"><strong>5 elite nights per $10,000</strong>${statusBadge(metric)}${metric.yearHistoryVerified ? `<button class="inline-link" data-setup="${escapeHtml(metric.account.id)}">Edit coverage</button>` : ''}</div>
     ${progressBar(metric.progressCents, metric.rule.thresholdCents)}
     <div class="spend-line"><strong>${money(metric.progressCents)}</strong> / ${money(metric.rule.thresholdCents)} toward the next 5 nights · <span class="muted">${money(nextSpend)} remaining</span></div>
     <div class="breakdown"><span>${money(metric.currentYearSpendCents)} qualifying spend in ${year}</span><strong>${metric.qualifyingTransactionCount} qualifying transactions</strong></div>
-    ${metric.yearHistoryVerified ? '' : '<div class="coverage-note">The total is calculated, but activity before the oldest captured transaction has not been confirmed.</div>'}
-    <div class="card-actions"><button data-setup="${escapeHtml(metric.account.id)}">Review year coverage</button></div>
+    ${metric.yearHistoryVerified ? '' : `<div class="coverage-note"><span>The total is calculated, but activity before the oldest captured transaction has not been confirmed.</span><button class="primary" data-setup="${escapeHtml(metric.account.id)}">Verify coverage</button></div>`}
   </article>`;
 }
 
@@ -1556,11 +1554,11 @@ const STYLES = `
   .body { min-height:220px; overflow:auto; padding:0 14px 14px; background:#fff; } .summary-intro { margin-bottom:10px; color:#65717c; } .cards { display:grid; gap:11px; }
   .card { border:1px solid #dce3e7; border-radius:10px; padding:14px; background:#fff; box-shadow:0 1px 3px #0b223810; } .card-title-row { display:flex; justify-content:space-between; gap:18px; } h3 { color:#25292e; font-size:16px; } .card-title-row p { margin-top:2px; color:#747b82; font-style:italic; } .last4 { font-weight:500; color:#5b626a; }
   .nights { min-width:140px; text-align:right; color:#123e72; } .nights strong,.nights span { display:block; } .nights strong { font-size:22px; } .nights span { color:#72777e; font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
-  .rule-row { margin-top:10px; color:#3f4449; font-size:14px; } .badge { display:inline-block; margin-left:7px; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; } .badge.good { background:#e0f1e5; color:#246c3a; } .badge.warn { background:#fff0d7; color:#895000; }
+  .rule-row { display:flex; align-items:center; flex-wrap:wrap; gap:7px; margin-top:10px; color:#3f4449; font-size:14px; } .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; } .badge.good { background:#e0f1e5; color:#246c3a; } .badge.warn { background:#fff0d7; color:#895000; } .inline-link { padding:1px 3px; border:0; background:transparent; color:#0d6374; font-size:11px; text-decoration:underline; text-underline-offset:2px; } .inline-link:hover { background:transparent; color:#084a57; }
   .progress { height:8px; margin:6px 0 4px; overflow:hidden; border-radius:99px; background:#eceeef; } .progress span { display:block; min-width:3px; height:100%; border-radius:inherit; background:linear-gradient(90deg,#32a59c,#cf9c2d); }
   .spend-line { padding-bottom:7px; border-bottom:1px dashed #d6dce1; color:#3d4247; } .spend-line strong { color:#123e72; } .muted { color:#7b8086; }
   .breakdown { display:flex; justify-content:space-between; gap:12px; padding-top:7px; color:#65707b; } .breakdown strong { color:#123e72; } .certificate { margin-top:10px; padding:9px 11px; border-radius:8px; background:#f5f8fa; } .certificate > div:first-child { display:flex; justify-content:space-between; gap:12px; } .certificate span { color:#68737f; } .certificate em { color:#895000; font-size:10px; font-weight:500; }
-  .card-actions { display:flex; justify-content:flex-end; margin-top:8px; } .card-actions button { padding:5px 9px; font-size:11px; } .setup-callout,.coverage-note { margin-top:8px; padding:9px 11px; border-radius:7px; background:#fff6e6; color:#805000; }
+  .setup-callout,.coverage-note { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:8px; padding:9px 11px; border-radius:7px; background:#fff6e6; color:#805000; } .setup-callout button,.coverage-note button { flex:none; border-color:#9b680e; background:#9b680e; color:#fff; } .setup-callout button:hover,.coverage-note button:hover { background:#7f5205; }
   .empty { max-width:580px; margin:24px auto; padding:24px; text-align:center; } .empty-icon { margin-bottom:8px; color:#27a2a2; font-size:28px; } .empty h2 { color:#123e72; font-size:20px; } .empty p { margin:8px 0 16px; } .small { color:#747d85; font-size:11px; }
   .syncing-view { max-width:540px; margin:38px auto; padding:28px; text-align:center; } .syncing-view h2 { margin:12px 0 7px; color:#123e72; font-size:20px; } .spinner { width:34px; height:34px; margin:auto; border:4px solid #dbe5ef; border-top-color:#0d6374; border-radius:50%; animation:spin .8s linear infinite; } @keyframes spin { to { transform:rotate(360deg); } }
   .detail-review { padding-top:8px; } .detail-heading { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin-bottom:10px; } .detail-heading h2,.setup-view h2,.debug-grid h2 { color:#123e72; } .detail-heading p,.detail-note { color:#68737f; }
@@ -1569,7 +1567,7 @@ const STYLES = `
   .setup-view { max-width:760px; margin:0 auto; padding:8px 0 18px; } .back-link { margin-bottom:10px; padding-left:0; border:0; background:none; color:#0d6374; } .setup-lead { margin:5px 0 16px; color:#626d77; } form { display:grid; gap:12px; } label { display:grid; gap:4px; color:#3f4a54; } label > span:first-child { font-weight:700; } input,select { width:100%; padding:8px 9px; border:1px solid #bec8d2; border-radius:6px; background:#fff; color:#26323d; } .coverage-summary { padding:10px 12px; border-radius:7px; background:#eef6f7; color:#315b63; }
   .mode-panel { display:none; gap:10px; padding:12px; border:1px solid #dce3e7; border-radius:8px; } .mode-panel.active { display:grid; } .method-note { display:flex; justify-content:space-between; gap:15px; padding:9px 11px; border-radius:7px; background:#f1f6f7; } .method-note span { color:#65717c; text-align:right; } .method-note.warn { background:#fff6e6; } .check { grid-template-columns:auto 1fr; align-items:start; gap:8px; } .check input { width:auto; margin-top:3px; } .check span { font-weight:400; } .inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .setup-actions { display:flex; gap:8px; justify-content:flex-end; }
   .debug-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding-top:8px; } .debug-grid section { padding:14px; border:1px solid #e0e4e8; border-radius:8px; } .debug-grid h2 { margin-bottom:8px; font-size:15px; } dl { margin:0; } dl div { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid #edf0f2; } dd { margin:0; font-weight:700; text-align:right; } .action-stack { display:grid; gap:7px; margin-top:10px; } .danger { border-color:#b44; color:#a22; } .wide { grid-column:1/-1; }
-  @media (max-width:720px) { .backdrop { padding:8px; } .header { align-items:flex-start; flex-wrap:wrap; } .brand { width:100%; } .controls { width:100%; overflow-x:auto; } .card-title-row,.breakdown,.certificate > div:first-child,.method-note,.detail-heading { align-items:flex-start; flex-direction:column; } .nights { text-align:left; } .inline-fields,.debug-grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
+  @media (max-width:720px) { .backdrop { padding:8px; } .header { align-items:flex-start; flex-wrap:wrap; } .brand { width:100%; } .controls { width:100%; overflow-x:auto; } .card-title-row,.breakdown,.certificate > div:first-child,.method-note,.detail-heading,.setup-callout,.coverage-note { align-items:flex-start; flex-direction:column; } .nights { text-align:left; } .inline-fields,.debug-grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
 `;
 
 function createHyattTrackerUi(handlers) {
@@ -1578,7 +1576,7 @@ function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.0.0</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.0.1</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden>`;

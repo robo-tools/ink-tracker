@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHyattDetailRows, findHyattSetupTarget } from '../apps/hyatt/ui.js';
+import { buildHyattDetailRows, displayAccountName, findHyattSetupTarget } from '../apps/hyatt/ui.js';
 
 const metric = {
   account: { id: 'hyatt', last4: '1234' },
@@ -26,4 +26,9 @@ test('a completed refresh leads directly to the first card needing user setup', 
 
   assert.equal(findHyattSetupTarget([readyPersonal, businessNeedsCoverage, personalNeedsSetup]), businessNeedsCoverage);
   assert.equal(findHyattSetupTarget([readyPersonal]), null);
+});
+
+test('Hyatt card names do not repeat an ASCII or Unicode masked ending', () => {
+  assert.equal(displayAccountName('World of Hyatt Credit Card (...1111)'), 'World of Hyatt Credit Card');
+  assert.equal(displayAccountName('World of Hyatt Credit Card (…1111)'), 'World of Hyatt Credit Card');
 });
