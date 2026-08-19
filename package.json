@@ -1,0 +1,15 @@
+{
+  "name": "ink-tracker-userscript",
+  "version": "0.9.6",
+  "private": true,
+  "type": "module",
+  "description": "A local-first Tampermonkey tracker for Chase Ink bonus-category spend and points.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test",
+    "check": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

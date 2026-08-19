@@ -1,0 +1,4 @@
+node_modules/
+*.log
+# Saved banking pages can contain private account and transaction data.
+chaseHTML/
