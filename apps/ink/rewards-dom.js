@@ -1,5 +1,5 @@
-import { formatDateOnly } from '../lib/dates.js';
-import { normalizeCategory, parseMoneyCents, stableId } from '../lib/normalize.js';
+import { formatDateOnly } from '../../packages/chase-core/lib/dates.js';
+import { normalizeCategory, parseMoneyCents, stableId } from '../../packages/chase-core/lib/normalize.js';
 
 const rewardsWait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 

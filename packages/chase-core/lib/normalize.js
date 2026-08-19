@@ -1,6 +1,5 @@
 import { formatDateOnly } from './dates.js';
 import { parseCsv, rowsToObjects } from './csv.js';
-import { identifyProduct } from './products.js';
 
 const DATE_KEYS = ['postDate', 'postedDate', 'transactionDate', 'date', 'effectiveDate', 'activityDate'];
 const DESCRIPTION_KEYS = ['description', 'merchantName', 'merchant', 'transactionDescription', 'displayName', 'name'];
@@ -148,7 +147,11 @@ export function normalizeTransaction(candidate, context = {}, source = 'network'
   };
 }
 
-export function extractNormalizedData(payload, sourceUrl = '') {
+export function extractNormalizedData(payload, sourceUrl = '', options = {}) {
+  const identifyProduct = typeof options.identifyProduct === 'function' ? options.identifyProduct : () => null;
+  const acceptsAccount = typeof options.acceptsAccount === 'function'
+    ? options.acceptsAccount
+    : (account) => Boolean(account.last4);
   const accounts = [];
   const transactions = [];
   const seen = new WeakSet();
@@ -165,14 +168,16 @@ export function extractNormalizedData(payload, sourceUrl = '') {
     const last4 = normalizeLast4(firstValue(value, LAST4_KEYS) ?? context.last4);
     const name = String(firstValue(value, ['accountName', 'productName', 'displayName', 'nickname']) ?? context.name ?? '');
     const nextContext = { accountId, last4, name };
-    if (accountId && (last4 || /ink\s+business/i.test(name))) {
-      accounts.push({
+    const product = identifyProduct(name);
+    if (accountId && (last4 || product)) {
+      const account = {
         id: accountId,
         name: name || `Card ending ${last4}`,
         last4,
-        productId: identifyProduct(name)?.id ?? null,
+        productId: product?.id ?? null,
         source: 'network'
-      });
+      };
+      if (acceptsAccount(account)) accounts.push(account);
     }
 
     const transaction = normalizeTransaction(value, nextContext, 'network');
@@ -181,7 +186,13 @@ export function extractNormalizedData(payload, sourceUrl = '') {
   }
 
   visit(payload);
-  return { accounts: dedupeAccounts(accounts), transactions: dedupeTransactions(transactions), sourceUrl };
+  const supportedAccounts = dedupeAccounts(accounts);
+  const supportedIds = new Set(supportedAccounts.map((account) => String(account.id)));
+  const supportedLast4 = new Set(supportedAccounts.map((account) => account.last4).filter(Boolean));
+  const supportedTransactions = transactions.filter((transaction) =>
+    supportedIds.has(String(transaction.accountId)) || supportedLast4.has(transaction.last4)
+  );
+  return { accounts: supportedAccounts, transactions: dedupeTransactions(supportedTransactions), sourceUrl };
 }
 
 export function normalizeChaseActivityRow(dataValues, account) {

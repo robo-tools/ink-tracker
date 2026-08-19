@@ -1,5 +1,4 @@
 import { normalizeChaseActivityRow, normalizeLast4 } from '../lib/normalize.js';
-import { identifyProduct } from '../lib/products.js';
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -10,45 +9,64 @@ function decodeHtmlEntities(value) {
     .replace(/&amp;/g, '&');
 }
 
-export function extractChaseAccounts(html = document.documentElement?.innerHTML ?? '') {
-  const decoded = decodeHtmlEntities(String(html));
-  const accounts = [];
-  const pattern = /"value":"([^"]*Ink\s+Business[^"]*\(\.\.\.\d{4}\))"\s*}[\s\S]{0,1000}?{\s*"accountId":\s*"?(\d+)"?[\s\S]{0,300}?"accountType":"([^"]+)"[\s\S]{0,200}?"accountDetailType":"([^"]+)"/gi;
-  for (const match of decoded.matchAll(pattern)) {
-    const name = match[1].trim();
-    accounts.push({
-      id: match[2],
-      name,
-      last4: normalizeLast4(name),
-      accountType: match[3],
-      accountDetailType: match[4],
-      productId: identifyProduct(name)?.id ?? null,
-      source: 'chase-dom'
-    });
-  }
-  return [...new Map(accounts.map((account) => [account.id, account])).values()];
+function productFor(name, options = {}) {
+  return typeof options.identifyProduct === 'function' ? options.identifyProduct(name) : null;
 }
 
-export function extractCurrentChaseAccount(doc = document, hash = location.hash) {
-  const route = String(hash).match(/#\/dashboard\/summary\/([^/]+)\/([^/]+)\/([^/?]+)/i);
-  if (!route) return null;
-  const bodyText = doc.body?.innerText ?? '';
-  const nameMatch = bodyText.match(/Account:\s*(Ink\s+Business[^\n]{0,80}?\(\.\.\.\d{4}\))/i)
-    ?? doc.title.match(/(Ink\s+Business[^|\-]{0,80}?\(\.\.\.\d{4}\))/i)
-    ?? bodyText.match(/(Ink\s+Business[^\n]{0,80}?\(\.\.\.\d{4}\))/i);
-  const name = nameMatch?.[1]?.trim() || `Ink card ${route[1]}`;
-  return {
+function accountIsSupported(account, options = {}) {
+  return typeof options.acceptsAccount === 'function' ? options.acceptsAccount(account) : Boolean(account.last4);
+}
+
+function accountFromRoute(name, route, options = {}) {
+  const account = {
     id: route[1],
     name,
     last4: normalizeLast4(name),
     accountType: route[2],
     accountDetailType: route[3],
-    productId: identifyProduct(name)?.id ?? null,
+    productId: productFor(name, options)?.id ?? null,
     source: 'chase-dom'
   };
+  return accountIsSupported(account, options) ? account : null;
 }
 
-export function extractChaseActivity(doc = document, account = extractCurrentChaseAccount(doc)) {
+export function extractChaseAccounts(html = document.documentElement?.innerHTML ?? '', options = {}) {
+  const decoded = decodeHtmlEntities(String(html));
+  const accounts = [];
+  const pattern = /"value":"([^"]{1,180}\(\.\.\.\d{4}\))"\s*}[\s\S]{0,1000}?{\s*"accountId":\s*"?(\d+)"?[\s\S]{0,300}?"accountType":"([^"]+)"[\s\S]{0,200}?"accountDetailType":"([^"]+)"/gi;
+  for (const match of decoded.matchAll(pattern)) {
+    const name = match[1].trim();
+    const account = {
+      id: match[2],
+      name,
+      last4: normalizeLast4(name),
+      accountType: match[3],
+      accountDetailType: match[4],
+      productId: productFor(name, options)?.id ?? null,
+      source: 'chase-dom'
+    };
+    if (accountIsSupported(account, options)) accounts.push(account);
+  }
+  return [...new Map(accounts.map((account) => [account.id, account])).values()];
+}
+
+function supportedNameFromText(text, options = {}) {
+  const candidates = [...String(text ?? '').matchAll(/([^\n|]{1,140}\(\.\.\.\d{4}\))/g)]
+    .map((match) => match[1].replace(/^.*?Account:\s*/i, '').trim());
+  return candidates.find((name) => accountIsSupported({ name, last4: normalizeLast4(name), productId: productFor(name, options)?.id ?? null }, options)) ?? '';
+}
+
+export function extractCurrentChaseAccount(doc = document, hash = location.hash, options = {}) {
+  const route = String(hash).match(/#\/dashboard\/summary\/([^/]+)\/([^/]+)\/([^/?]+)/i);
+  if (!route) return null;
+  const bodyText = doc.body?.innerText ?? '';
+  const name = supportedNameFromText(`${bodyText}\n${doc.title ?? ''}`, options);
+  if (!name) return null;
+  return accountFromRoute(name, route, options);
+}
+
+export function extractChaseActivity(doc = document, account = null, options = {}) {
+  account = account ?? extractCurrentChaseAccount(doc, typeof location === 'undefined' ? '' : location.hash, options);
   if (!account) return { accounts: [], transactions: [], reachedEnd: false, validEmpty: false };
   const rows = [...doc.querySelectorAll('.mds-activity-table__row[data-values], tr[data-values]')];
   const transactions = rows
@@ -118,31 +136,32 @@ function scrollToActivityFooter(doc = document) {
   target?.scrollIntoView?.({ block: 'end', behavior: 'auto' });
 }
 
-async function waitForActivityControl(doc = document) {
+async function waitForActivityControl(doc = document, options = {}, account = null) {
   for (let poll = 0; poll < 16; poll += 1) {
-    const result = extractChaseActivity(doc);
+    const result = extractChaseActivity(doc, account, options);
     if (result.reachedEnd || (result.validEmpty && result.transactions.length === 0)) return { result, button: null };
     const button = findLoadMore(doc);
     if (button) return { result, button };
     scrollToActivityFooter(doc);
     await wait(250);
   }
-  return { result: extractChaseActivity(doc), button: findLoadMore(doc) };
+  return { result: extractChaseActivity(doc, account, options), button: findLoadMore(doc) };
 }
 
-async function waitForActivity(account, timeoutMs = 30_000) {
+async function waitForActivity(account, options = {}, timeoutMs = 30_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const current = extractCurrentChaseAccount();
-    const correctCard = current?.id === String(account.id)
-      && (!account.last4 || current.last4 === account.last4 || document.title.includes(account.last4));
+    const current = extractCurrentChaseAccount(document, location.hash, options);
+    const routeId = String(location.hash).match(/#\/dashboard\/summary\/([^/]+)/i)?.[1];
+    const correctCard = String(current?.id ?? routeId ?? '') === String(account.id)
+      && (!account.last4 || !current || current.last4 === account.last4 || document.title.includes(account.last4));
     if (correctCard && document.querySelector('mds-select-option[label="All transactions"], .mds-activity-table')) return true;
     await wait(250);
   }
   return false;
 }
 
-export async function loadAllCurrentActivity(onProgress = () => {}) {
+export async function loadAllCurrentActivity(onProgress = () => {}, options = {}, account = null) {
   const before = document.querySelectorAll('.mds-activity-table__row[data-values], tr[data-values]').length;
   const changedFilter = await clickAllTransactions();
   if (changedFilter) {
@@ -159,7 +178,7 @@ export async function loadAllCurrentActivity(onProgress = () => {}) {
   }
 
   for (let page = 0; page < 100; page += 1) {
-    const control = await waitForActivityControl();
+    const control = await waitForActivityControl(document, options, account);
     if (control.result.reachedEnd || (control.result.validEmpty && control.result.transactions.length === 0)) break;
     const button = control.button;
     if (!button) break;
@@ -169,24 +188,25 @@ export async function loadAllCurrentActivity(onProgress = () => {}) {
     for (let poll = 0; poll < 40; poll += 1) {
       await wait(250);
       const newCount = document.querySelectorAll('.mds-activity-table__row[data-values], tr[data-values]').length;
-      const result = extractChaseActivity();
+      const result = extractChaseActivity(document, account, options);
       if (newCount > oldCount || result.reachedEnd || !document.contains(button)) break;
     }
   }
-  const result = extractChaseActivity();
+  const result = extractChaseActivity(document, account, options);
   if (!result.reachedEnd && !(result.validEmpty && result.transactions.length === 0)) {
     throw new Error(`Chase did not confirm the end of this card's activity${result.transactions.length ? ` (${result.transactions.length} partial rows were ignored)` : ''}. No activity data was saved.`);
   }
   return result;
 }
 
-export async function syncAllInkCards(onProgress = () => {}) {
+export async function syncAllCards(onProgress = () => {}, options = {}) {
   const originalHash = location.hash;
-  const discovered = extractChaseAccounts();
-  const current = extractCurrentChaseAccount();
+  const discovered = extractChaseAccounts(document.documentElement?.innerHTML ?? '', options);
+  const current = extractCurrentChaseAccount(document, location.hash, options);
   const accounts = discovered.length ? discovered : current ? [current] : [];
   if (!accounts.length) {
-    throw new Error('No Ink cards were found. Open the Chase Accounts dashboard or an Ink card activity page, then retry.');
+    const label = options.cardLabel || 'supported cards';
+    throw new Error(`No ${label} were found. Open the Chase Accounts dashboard or a supported card activity page, then retry.`);
   }
 
   const result = { accounts, transactions: [], coverage: {} };
@@ -197,10 +217,10 @@ export async function syncAllInkCards(onProgress = () => {}) {
       const route = `#/dashboard/summary/${account.id}/${account.accountType || 'CARD'}/${account.accountDetailType || 'BCC'}`;
       if (location.hash !== route) {
         location.hash = route.slice(1);
-        const ready = await waitForActivity(account);
+        const ready = await waitForActivity(account, options);
         if (!ready) throw new Error(`Timed out while opening ${account.name}.`);
       }
-      const data = await loadAllCurrentActivity(onProgress);
+      const data = await loadAllCurrentActivity(onProgress, options, account);
       result.transactions.push(...data.transactions);
       const dates = data.transactions.map((transaction) => transaction.date).filter(Boolean).sort();
       result.coverage[account.id] = {

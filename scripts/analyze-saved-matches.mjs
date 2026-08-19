@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
-import { normalizeChaseActivityRow } from '../src/lib/normalize.js';
-import { parseRewardsListItemAttributes } from '../src/app/rewards-dom.js';
-import { applyRewardEnrichment, calculateCardMetrics } from '../src/lib/calculations.js';
-import { mergeRewardRecords, mergeTransactions } from '../src/app/storage.js';
+import { normalizeChaseActivityRow } from '../packages/chase-core/lib/normalize.js';
+import { parseRewardsListItemAttributes } from '../apps/ink/rewards-dom.js';
+import { applyRewardEnrichment, calculateCardMetrics } from '../apps/ink/calculations.js';
+import { mergeRewardRecords, mergeTransactions } from '../packages/chase-core/app/storage.js';
 
 const [activityPath, rewardsPath, last4 = '0000'] = process.argv.slice(2);
 if (!activityPath || !rewardsPath) {

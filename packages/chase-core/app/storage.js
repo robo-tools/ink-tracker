@@ -1,8 +1,6 @@
 import { dedupeAccounts } from '../lib/normalize.js';
 import { dateDistanceDays, merchantSimilarity } from '../lib/matching.js';
 
-const STORAGE_KEY = 'ink-tracker-state-v1';
-
 export function emptyState() {
   return {
     schemaVersion: 2,
@@ -221,31 +219,33 @@ export function repairStateAccountMetadata(state) {
   return { ...state, accounts, coverage };
 }
 
-export function createStorage() {
+export function createStorage(options = {}) {
+  const storageKey = options.storageKey || 'ink-tracker-state-v1';
+  const label = options.label || 'Chase Tracker';
   const hasGm = typeof GM !== 'undefined' && typeof GM.getValue === 'function';
   return {
     async load() {
       try {
-        const value = hasGm ? await GM.getValue(STORAGE_KEY, null) : localStorage.getItem(STORAGE_KEY);
+        const value = hasGm ? await GM.getValue(storageKey, null) : localStorage.getItem(storageKey);
         const parsed = typeof value === 'string' ? JSON.parse(value) : value;
         if (!parsed) return emptyState();
         const loaded = { ...emptyState(), ...parsed, schemaVersion: 2 };
         loaded.transactions = reconcileTransactions(loaded.transactions ?? []);
         return loaded;
       } catch (error) {
-        console.warn('[Ink Tracker] Could not load local state.', error);
+        console.warn(`[${label}] Could not load local state.`, error);
         return emptyState();
       }
     },
     async save(state) {
       const next = { ...state, updatedAt: new Date().toISOString() };
-      if (hasGm) await GM.setValue(STORAGE_KEY, next);
-      else localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      if (hasGm) await GM.setValue(storageKey, next);
+      else localStorage.setItem(storageKey, JSON.stringify(next));
       return next;
     },
     async clear() {
-      if (hasGm && typeof GM.deleteValue === 'function') await GM.deleteValue(STORAGE_KEY);
-      else localStorage.removeItem(STORAGE_KEY);
+      if (hasGm && typeof GM.deleteValue === 'function') await GM.deleteValue(storageKey);
+      else localStorage.removeItem(storageKey);
     }
   };
 }

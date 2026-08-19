@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractRewardsActivity, parseRewardsListItemAttributes } from '../src/app/rewards-dom.js';
+import { extractRewardsActivity, parseRewardsListItemAttributes } from '../apps/ink/rewards-dom.js';
 
 test('parses an authoritative Ultimate Rewards purchase row', () => {
   const reward = parseRewardsListItemAttributes({

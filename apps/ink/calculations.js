@@ -1,6 +1,6 @@
-import { dateIsInWindow, getAnniversaryWindow, getCalendarYearWindow } from './dates.js';
+import { dateIsInWindow, getAnniversaryWindow, getCalendarYearWindow } from '../../packages/chase-core/lib/dates.js';
 import { getProductRule } from './products.js';
-import { belongsToAccount, dateDistanceDays, isPending, merchantSimilarity } from './matching.js';
+import { belongsToAccount, dateDistanceDays, isPending, merchantSimilarity } from '../../packages/chase-core/lib/matching.js';
 
 export function transactionQualifies(transaction, rule) {
   if (!transaction || isPending(transaction) || transaction.kind === 'payment' || transaction.kind === 'non_purchase') return false;

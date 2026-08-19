@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hyatt Tracker UI Harness</title></head>
+<body style="min-height:100vh;margin:0;background:#eef2f5;font-family:system-ui">
+  <main style="padding:32px"><h1>Chase page stand-in</h1><p>The userscript UI is rendered over this neutral test page.</p></main>
+  <script>
+    window.unsafeWindow = window;
+    const sampleState = {
+      schemaVersion: 2,
+      accounts: [
+        { id: 'personal-1234', name: 'World of Hyatt (...1234)', last4: '1234', productId: 'hyatt-personal' },
+        { id: 'business-5678', name: 'World of Hyatt Business (...5678)', last4: '5678', productId: 'hyatt-business' }
+      ],
+      transactions: [
+        { id: 'p1', accountId: 'personal-1234', last4: '1234', date: '2025-02-10', description: 'First purchase', amountCents: 480000, spendCents: 480000, kind: 'purchase', status: 'posted', source: 'chase-dom' },
+        { id: 'p2', accountId: 'personal-1234', last4: '1234', date: '2026-03-10', description: 'Hyatt Regency', amountCents: 125000, spendCents: 125000, kind: 'purchase', status: 'posted', source: 'chase-dom' },
+        { id: 'p3', accountId: 'personal-1234', last4: '1234', date: '2026-04-10', description: 'Annual Fee', amountCents: 9500, spendCents: 0, kind: 'non_purchase', status: 'posted', source: 'chase-dom' },
+        { id: 'b1', accountId: 'business-5678', last4: '5678', date: '2026-01-15', description: 'Business purchase', amountCents: 1350000, spendCents: 1350000, kind: 'purchase', status: 'posted', source: 'chase-dom' }
+      ],
+      rewardRecords: [],
+      coverage: {
+        'personal-1234': { activity: { complete: true, rowCount: 3, earliest: '2025-02-10', latest: '2026-04-10' } },
+        'business-5678': { activity: { complete: true, rowCount: 1, earliest: '2026-01-15', latest: '2026-01-15' } }
+      },
+      cardConfig: {
+        'personal-1234': { productId: 'hyatt-personal', benefitStartDate: '2025-01-20', historyMode: 'full', historyConfirmed: true },
+        'business-5678': { productId: 'hyatt-business', yearHistoryConfirmed: 2026 }
+      },
+      captureStats: { payloads: 4, lastSource: 'chase-dom', lastCapturedAt: '2026-08-19T20:00:00.000Z' },
+      updatedAt: '2026-08-19T20:00:00.000Z'
+    };
+    window.GM = {
+      getValue: async () => sampleState,
+      setValue: async () => {},
+      deleteValue: async () => {}
+    };
+  </script>
+  <script src="/dist/hyatt-tracker.user.js"></script>
+</body>
+</html>

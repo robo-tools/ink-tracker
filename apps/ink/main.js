@@ -1,15 +1,21 @@
-import { formatDateOnly } from './lib/dates.js';
-import { identifyProduct } from './lib/products.js';
-import { normalizeChaseCsv, normalizeLast4 } from './lib/normalize.js';
-import { scoreRewardAccount } from './lib/calculations.js';
-import { commitFullSync, createStorage, emptyState, mergeState, mergeSupplementalTransactions, repairStateAccountMetadata } from './app/storage.js';
-import { extractChaseAccounts, extractChaseActivity, syncAllInkCards } from './app/chase-dom.js';
-import { loadRewardsActivity } from './app/rewards-dom.js';
-import { installChaseNetworkCapture } from './app/capture.js';
-import { createInkTrackerUi } from './app/ui.js';
+import { formatDateOnly } from '../../packages/chase-core/lib/dates.js';
+import { identifyProduct, isInkAccount } from './products.js';
+import { extractNormalizedData, normalizeChaseCsv, normalizeLast4 } from '../../packages/chase-core/lib/normalize.js';
+import { scoreRewardAccount } from './calculations.js';
+import { commitFullSync, createStorage, emptyState, mergeState, mergeSupplementalTransactions, repairStateAccountMetadata } from '../../packages/chase-core/app/storage.js';
+import { extractChaseAccounts, extractChaseActivity, syncAllCards } from '../../packages/chase-core/app/chase-dom.js';
+import { loadRewardsActivity } from './rewards-dom.js';
+import { installChaseNetworkCapture } from '../../packages/chase-core/app/capture.js';
+import { createInkTrackerUi } from './ui.js';
+
+const INK_CHASE_OPTIONS = Object.freeze({
+  identifyProduct,
+  acceptsAccount: isInkAccount,
+  cardLabel: 'Ink cards'
+});
 
 void (async function startInkTracker() {
-  const storage = createStorage();
+  const storage = createStorage({ storageKey: 'ink-tracker-state-v1', label: 'Ink Tracker' });
   const pendingCapture = [];
   let state = null;
   let ui = null;
@@ -44,7 +50,11 @@ void (async function startInkTracker() {
     void save(next);
   }
 
-  const captureStatus = installChaseNetworkCapture(acceptCapture);
+  const captureStatus = installChaseNetworkCapture(acceptCapture, {
+    marker: '__inkTrackerCaptureV2',
+    label: 'Ink Tracker',
+    normalizePayload: (payload, url) => extractNormalizedData(payload, url, INK_CHASE_OPTIONS)
+  });
   state = repairStateAccountMetadata(await storage.load());
   for (const captured of pendingCapture) {
     state = mergeState(state, { ...captured, transactions: [], payloadCount: 1 }, 'network');
@@ -137,7 +147,7 @@ void (async function startInkTracker() {
       batchingCapture = true;
       batchedCaptures = [];
       try {
-        const data = await syncAllInkCards(progress);
+        const data = await syncAllCards(progress, INK_CHASE_OPTIONS);
         await new Promise((resolve) => setTimeout(resolve, 250));
         let draftState = mergeState(emptyState(), data, 'chase-dom');
         for (const captured of batchedCaptures) {
@@ -318,8 +328,8 @@ void (async function startInkTracker() {
     if (location.hostname !== 'secure.chase.com') return;
     if (batchingCapture || state.rewardSync?.active) return;
     if (foundAccountMetadata) return;
-    const accounts = extractChaseAccounts();
-    const activity = extractChaseActivity();
+    const accounts = extractChaseAccounts(document.documentElement?.innerHTML ?? '', INK_CHASE_OPTIONS);
+    const activity = extractChaseActivity(document, null, INK_CHASE_OPTIONS);
     if (!accounts.length && !activity.accounts.length) return;
     foundAccountMetadata = true;
     await save(mergeState(state, {

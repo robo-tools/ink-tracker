@@ -5,7 +5,7 @@ import {
   normalizeChaseCsv,
   normalizeCategory,
   parseMoneyCents
-} from '../src/lib/normalize.js';
+} from '../packages/chase-core/lib/normalize.js';
 
 const account = { id: '123', name: 'Ink Business Cash (…4321)', last4: '4321' };
 

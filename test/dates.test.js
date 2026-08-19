@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getAnniversaryWindow, parseDateOnly } from '../src/lib/dates.js';
+import { getAnniversaryWindow, parseDateOnly } from '../packages/chase-core/lib/dates.js';
 
 test('anniversary window spans the current cardmember year', () => {
   assert.deepEqual(getAnniversaryWindow('2026-01-15', 2, 10), {

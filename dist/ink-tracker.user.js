@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ink Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      0.9.7
+// @version      1.0.0
 // @description  Tracks Chase Ink bonus-category spend, anniversary caps, and verified or estimated points locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -21,7 +21,7 @@
 (() => {
   'use strict';
 
-// ---- src/lib/dates.js ----
+// ---- packages/chase-core/lib/dates.js ----
 const DAY_MS = 86_400_000;
 
 function parseDateOnly(value) {
@@ -100,73 +100,9 @@ function dateIsInWindow(dateValue, window) {
   return Boolean(date && window && date >= window.start && date < window.endExclusive);
 }
 
-// end src/lib/dates.js
+// end packages/chase-core/lib/dates.js
 
-// ---- src/lib/products.js ----
-const PRODUCT_RULES = Object.freeze([
-  {
-    id: 'ink-cash',
-    names: [/ink business cash/i, /ink cash/i],
-    label: 'Ink Business Cash®',
-    baseMultiplier: 1,
-    bonusMultiplier: 5,
-    annualCapCents: 2_500_000,
-    categoryLabel: '5× category (office · phone · internet · cable)',
-    qualifyingCategories: ['office_supplies', 'phone', 'internet', 'cable'],
-    secondaryTiers: [{ multiplier: 2, annualCapCents: 2_500_000, categories: ['gas', 'dining'] }]
-  },
-  {
-    id: 'ink-preferred',
-    names: [/ink business preferred/i, /ink preferred/i],
-    label: 'Ink Business Preferred®',
-    baseMultiplier: 1,
-    bonusMultiplier: 3,
-    annualCapCents: 15_000_000,
-    categoryLabel: '3× category (shipping · travel · ads · social · comms)',
-    qualifyingCategories: ['shipping', 'travel', 'advertising', 'social_media', 'phone', 'internet', 'cable']
-  },
-  {
-    id: 'ink-unlimited',
-    names: [/ink business unlimited/i, /ink unlimited/i],
-    label: 'Ink Business Unlimited®',
-    baseMultiplier: 1.5,
-    bonusMultiplier: 1.5,
-    annualCapCents: null,
-    categoryLabel: '1.5× on purchases',
-    qualifyingCategories: ['all']
-  },
-  {
-    id: 'ink-premier',
-    names: [/ink business premier/i, /ink premier/i],
-    label: 'Ink Business Premier℠',
-    baseMultiplier: 2,
-    bonusMultiplier: 2,
-    annualCapCents: null,
-    categoryLabel: '2× on purchases (2.5× on eligible $5,000+ purchases)',
-    qualifyingCategories: ['all'],
-    largePurchaseThresholdCents: 500_000,
-    largePurchaseMultiplier: 2.5
-  }
-]);
-
-function identifyProduct(accountOrName) {
-  const text = typeof accountOrName === 'string'
-    ? accountOrName
-    : `${accountOrName?.name ?? ''} ${accountOrName?.productName ?? ''}`;
-  return PRODUCT_RULES.find((rule) => rule.names.some((pattern) => pattern.test(text))) ?? null;
-}
-
-function getProductRule(productId, fallbackName = '') {
-  return PRODUCT_RULES.find((rule) => rule.id === productId) ?? identifyProduct(fallbackName);
-}
-
-function isInkAccount(account) {
-  return Boolean(identifyProduct(account));
-}
-
-// end src/lib/products.js
-
-// ---- src/lib/csv.js ----
+// ---- packages/chase-core/lib/csv.js ----
 function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -211,9 +147,47 @@ function rowsToObjects(rows) {
   return rows.slice(1).map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ''])));
 }
 
-// end src/lib/csv.js
+// end packages/chase-core/lib/csv.js
 
-// ---- src/lib/normalize.js ----
+// ---- packages/chase-core/lib/matching.js ----
+function merchantKey(value) {
+  return String(value ?? '')
+    .toUpperCase()
+    .replace(/\b(PP|BHN|STORE|PURCHASE|PAYMENT|ONLINE|COM)\b/g, '')
+    .replace(/\d{3,}/g, '')
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function merchantSimilarity(left, right) {
+  const a = merchantKey(left);
+  const b = merchantKey(right);
+  if (!a || !b) return 0;
+  if (a.includes(b) || b.includes(a)) return 1;
+  const pairs = (value) => new Set([...value].slice(0, -1).map((char, index) => char + value[index + 1]));
+  const aPairs = pairs(a);
+  const bPairs = pairs(b);
+  const intersection = [...aPairs].filter((pair) => bPairs.has(pair)).length;
+  return intersection / Math.max(1, Math.max(aPairs.size, bPairs.size));
+}
+
+function dateDistanceDays(left, right) {
+  const a = parseDateOnly(left);
+  const b = parseDateOnly(right);
+  return a && b ? Math.abs(a - b) / 86_400_000 : Number.POSITIVE_INFINITY;
+}
+
+function belongsToAccount(item, account) {
+  if (item?.accountId && account?.id) return String(item.accountId) === String(account.id);
+  return Boolean(item?.last4 && account?.last4 && item.last4 === account.last4);
+}
+
+function isPending(transaction) {
+  return transaction?.status === 'pending';
+}
+
+// end packages/chase-core/lib/matching.js
+
+// ---- packages/chase-core/lib/normalize.js ----
 const DATE_KEYS = ['postDate', 'postedDate', 'transactionDate', 'date', 'effectiveDate', 'activityDate'];
 const DESCRIPTION_KEYS = ['description', 'merchantName', 'merchant', 'transactionDescription', 'displayName', 'name'];
 const AMOUNT_KEYS = ['transactionAmount', 'amount', 'purchaseAmount', 'billingAmount', 'amountValue'];
@@ -360,7 +334,11 @@ function normalizeTransaction(candidate, context = {}, source = 'network') {
   };
 }
 
-function extractNormalizedData(payload, sourceUrl = '') {
+function extractNormalizedData(payload, sourceUrl = '', options = {}) {
+  const identifyProduct = typeof options.identifyProduct === 'function' ? options.identifyProduct : () => null;
+  const acceptsAccount = typeof options.acceptsAccount === 'function'
+    ? options.acceptsAccount
+    : (account) => Boolean(account.last4);
   const accounts = [];
   const transactions = [];
   const seen = new WeakSet();
@@ -377,14 +355,16 @@ function extractNormalizedData(payload, sourceUrl = '') {
     const last4 = normalizeLast4(firstValue(value, LAST4_KEYS) ?? context.last4);
     const name = String(firstValue(value, ['accountName', 'productName', 'displayName', 'nickname']) ?? context.name ?? '');
     const nextContext = { accountId, last4, name };
-    if (accountId && (last4 || /ink\s+business/i.test(name))) {
-      accounts.push({
+    const product = identifyProduct(name);
+    if (accountId && (last4 || product)) {
+      const account = {
         id: accountId,
         name: name || `Card ending ${last4}`,
         last4,
-        productId: identifyProduct(name)?.id ?? null,
+        productId: product?.id ?? null,
         source: 'network'
-      });
+      };
+      if (acceptsAccount(account)) accounts.push(account);
     }
 
     const transaction = normalizeTransaction(value, nextContext, 'network');
@@ -393,7 +373,13 @@ function extractNormalizedData(payload, sourceUrl = '') {
   }
 
   visit(payload);
-  return { accounts: dedupeAccounts(accounts), transactions: dedupeTransactions(transactions), sourceUrl };
+  const supportedAccounts = dedupeAccounts(accounts);
+  const supportedIds = new Set(supportedAccounts.map((account) => String(account.id)));
+  const supportedLast4 = new Set(supportedAccounts.map((account) => account.last4).filter(Boolean));
+  const supportedTransactions = transactions.filter((transaction) =>
+    supportedIds.has(String(transaction.accountId)) || supportedLast4.has(transaction.last4)
+  );
+  return { accounts: supportedAccounts, transactions: dedupeTransactions(supportedTransactions), sourceUrl };
 }
 
 function normalizeChaseActivityRow(dataValues, account) {
@@ -450,230 +436,9 @@ function dedupeAccounts(accounts) {
   return [...byKey.values()];
 }
 
-// end src/lib/normalize.js
+// end packages/chase-core/lib/normalize.js
 
-// ---- src/lib/matching.js ----
-function merchantKey(value) {
-  return String(value ?? '')
-    .toUpperCase()
-    .replace(/\b(PP|BHN|STORE|PURCHASE|PAYMENT|ONLINE|COM)\b/g, '')
-    .replace(/\d{3,}/g, '')
-    .replace(/[^A-Z0-9]/g, '');
-}
-
-function merchantSimilarity(left, right) {
-  const a = merchantKey(left);
-  const b = merchantKey(right);
-  if (!a || !b) return 0;
-  if (a.includes(b) || b.includes(a)) return 1;
-  const pairs = (value) => new Set([...value].slice(0, -1).map((char, index) => char + value[index + 1]));
-  const aPairs = pairs(a);
-  const bPairs = pairs(b);
-  const intersection = [...aPairs].filter((pair) => bPairs.has(pair)).length;
-  return intersection / Math.max(1, Math.max(aPairs.size, bPairs.size));
-}
-
-function dateDistanceDays(left, right) {
-  const a = parseDateOnly(left);
-  const b = parseDateOnly(right);
-  return a && b ? Math.abs(a - b) / 86_400_000 : Number.POSITIVE_INFINITY;
-}
-
-function belongsToAccount(item, account) {
-  if (item?.accountId && account?.id) return String(item.accountId) === String(account.id);
-  return Boolean(item?.last4 && account?.last4 && item.last4 === account.last4);
-}
-
-function isPending(transaction) {
-  return transaction?.status === 'pending';
-}
-
-// end src/lib/matching.js
-
-// ---- src/lib/calculations.js ----
-function transactionQualifies(transaction, rule) {
-  if (!transaction || isPending(transaction) || transaction.kind === 'payment' || transaction.kind === 'non_purchase') return false;
-  if (rule.qualifyingCategories.includes('all')) return true;
-  if (!rule.qualifyingCategories.includes(transaction.category)) return false;
-  if (Number.isFinite(transaction.reportedMultiplier) && transaction.reportedMultiplier > 0) {
-    return transaction.reportedMultiplier >= rule.bonusMultiplier;
-  }
-  return true;
-}
-
-function estimateTransactionMultiplier(transaction, rule) {
-  if (Number.isFinite(transaction.reportedMultiplier) && transaction.reportedMultiplier > 0) return transaction.reportedMultiplier;
-  if (rule.largePurchaseThresholdCents && transaction.spendCents >= rule.largePurchaseThresholdCents) {
-    return rule.largePurchaseMultiplier;
-  }
-  if (transactionQualifies(transaction, rule)) return rule.bonusMultiplier;
-  const secondary = rule.secondaryTiers?.find((tier) => tier.categories.includes(transaction.category));
-  return secondary?.multiplier ?? rule.baseMultiplier;
-}
-
-function sum(values) {
-  return values.reduce((total, value) => total + (Number(value) || 0), 0);
-}
-
-function rewardMatchesForAccount(transactions, rewardRecords, account) {
-  const available = transactions
-    .map((transaction, index) => ({ transaction, index }))
-    .filter(({ transaction }) => belongsToAccount(transaction, account)
-      && !isPending(transaction)
-      && !['payment', 'non_purchase'].includes(transaction.kind));
-  const pairs = [];
-  for (let rewardIndex = 0; rewardIndex < rewardRecords.length; rewardIndex += 1) {
-    const reward = rewardRecords[rewardIndex];
-    for (const candidate of available) {
-      if (Math.abs(candidate.transaction.spendCents) !== Math.abs(reward.amountCents)) continue;
-      if (Number(reward.reportedPoints) < 0 && candidate.transaction.spendCents >= 0) continue;
-      if (Number(reward.reportedPoints) > 0 && candidate.transaction.spendCents < 0) continue;
-      const days = dateDistanceDays(candidate.transaction.date, reward.date);
-      if (days > 7) continue;
-      const similarity = merchantSimilarity(candidate.transaction.description, reward.description);
-      if (similarity < 0.45) continue;
-      pairs.push({
-        ...candidate,
-        reward,
-        rewardIndex,
-        similarity,
-        score: similarity * 100 - days * 4 + (days === 0 ? 5 : 0)
-      });
-    }
-  }
-  pairs.sort((left, right) => right.score - left.score);
-  const usedTransactions = new Set();
-  const usedRewards = new Set();
-  const matches = [];
-  for (const pair of pairs) {
-    if (usedTransactions.has(pair.index) || usedRewards.has(pair.rewardIndex)) continue;
-    usedTransactions.add(pair.index);
-    usedRewards.add(pair.rewardIndex);
-    matches.push(pair);
-  }
-  return matches;
-}
-
-function scoreRewardAccount(transactions, rewardRecords, account) {
-  return rewardMatchesForAccount(transactions, rewardRecords, account).length;
-}
-
-function applyRewardEnrichment(transactions, rewardRecords, account) {
-  const relevantRewards = rewardRecords.filter((reward) => !reward.accountId || String(reward.accountId) === String(account.id));
-  const enriched = transactions.map((transaction) => ({ ...transaction }));
-  const matches = rewardMatchesForAccount(enriched, relevantRewards, account);
-  for (const match of matches) {
-    const transaction = enriched[match.index];
-    transaction.reportedMultiplier = match.reward.reportedMultiplier;
-    transaction.reportedPoints = match.reward.reportedPoints;
-    transaction.rewardMatched = true;
-  }
-  return { transactions: enriched, matchedCount: matches.length, rewardCount: relevantRewards.length };
-}
-
-function calculateCardMetrics(account, transactions, config = {}, asOf = new Date()) {
-  const rule = getProductRule(config.productId ?? account.productId, account.name);
-  if (!rule) return null;
-  const anniversary = getAnniversaryWindow(asOf, config.anniversaryMonth, config.anniversaryDay);
-  const window = anniversary ?? getCalendarYearWindow(asOf);
-  const allPeriodTransactions = transactions.filter((transaction) =>
-    belongsToAccount(transaction, account) && dateIsInWindow(transaction.date, window)
-  );
-  const pendingTransactionCount = allPeriodTransactions.filter(isPending).length;
-  const periodTransactions = allPeriodTransactions.filter((transaction) => !isPending(transaction));
-  const purchaseTransactions = periodTransactions.filter((transaction) => !['payment', 'non_purchase'].includes(transaction.kind));
-  const qualifyingTransactions = purchaseTransactions.filter((transaction) => transactionQualifies(transaction, rule));
-  const totalSpendCents = Math.max(0, sum(purchaseTransactions.map((transaction) => transaction.spendCents)));
-  const rawQualifyingSpendCents = Math.max(0, sum(qualifyingTransactions.map((transaction) => transaction.spendCents)));
-  const capCents = rule.annualCapCents;
-  const qualifyingSpendCents = capCents === null
-    ? rawQualifyingSpendCents
-    : Math.min(rawQualifyingSpendCents, capCents);
-  const remainingCents = capCents === null ? null : Math.max(0, capCents - qualifyingSpendCents);
-  const basePoints = Math.round((totalSpendCents / 100) * rule.baseMultiplier);
-  const bonusPoints = Math.round((qualifyingSpendCents / 100) * Math.max(0, rule.bonusMultiplier - rule.baseMultiplier));
-  const secondaryBonusPoints = sum((rule.secondaryTiers ?? []).map((tier) => {
-    const tierSpend = Math.max(0, sum(purchaseTransactions
-      .filter((transaction) => tier.categories.includes(transaction.category))
-      .map((transaction) => transaction.spendCents)));
-    const cappedTierSpend = Math.min(tierSpend, tier.annualCapCents ?? tierSpend);
-    return Math.round((cappedTierSpend / 100) * (tier.multiplier - rule.baseMultiplier));
-  }));
-  const largePurchaseBonusPoints = rule.largePurchaseThresholdCents
-    ? Math.round(sum(purchaseTransactions
-      .filter((transaction) => transaction.spendCents >= rule.largePurchaseThresholdCents)
-      .map((transaction) => (transaction.spendCents / 100) * (rule.largePurchaseMultiplier - rule.baseMultiplier))))
-    : 0;
-  const capturedPointsValues = purchaseTransactions
-    .map((transaction) => transaction.reportedPoints)
-    .filter((value) => Number.isFinite(value));
-  const inferredCount = qualifyingTransactions.filter((transaction) => transaction.categorySource === 'merchant' && !transaction.rewardMatched).length;
-  const estimatedPoints = basePoints + bonusPoints + secondaryBonusPoints + largePurchaseBonusPoints;
-  const exactPointCoverage = purchaseTransactions.length > 0 && capturedPointsValues.length === purchaseTransactions.length;
-  const capturedPoints = capturedPointsValues.length ? Math.round(sum(capturedPointsValues)) : null;
-
-  return {
-    account,
-    rule,
-    window,
-    windowSource: anniversary ? 'anniversary' : 'calendar-fallback',
-    qualifyingSpendCents,
-    uncappedQualifyingSpendCents: rawQualifyingSpendCents,
-    capCents,
-    remainingCents,
-    usedPercent: capCents ? Math.min(100, (qualifyingSpendCents / capCents) * 100) : null,
-    totalSpendCents,
-    basePoints,
-    bonusPoints,
-    secondaryBonusPoints,
-    largePurchaseBonusPoints,
-    estimatedPoints,
-    capturedPoints,
-    displayPoints: exactPointCoverage ? capturedPoints : estimatedPoints,
-    pointsSource: exactPointCoverage ? 'rewards' : 'estimated',
-    pointCoverageCount: capturedPointsValues.length,
-    pointTransactionCount: purchaseTransactions.length,
-    transactionCount: periodTransactions.length,
-    pendingTransactionCount,
-    qualifyingTransactionCount: qualifyingTransactions.length,
-    inferredCount,
-    periodTransactions
-  };
-}
-
-function calculateAllCards(state, asOf = new Date()) {
-  return state.accounts
-    .map((account) => {
-      const enrichment = applyRewardEnrichment(state.transactions, state.rewardRecords ?? [], account);
-      const metrics = calculateCardMetrics(account, enrichment.transactions, state.cardConfig?.[account.id] ?? {}, asOf);
-      if (!metrics) return null;
-      const periodRewardCount = (state.rewardRecords ?? []).filter((reward) =>
-        (!reward.accountId || String(reward.accountId) === String(account.id))
-        && dateIsInWindow(reward.date, metrics.window)
-      ).length;
-      const periodMatchedCount = metrics.periodTransactions.filter((transaction) => transaction.rewardMatched).length;
-      const coverage = state.coverage?.[account.id] ?? {};
-      const activity = coverage.activity;
-      const activityCoversWindow = Boolean(activity?.complete
-        && (activity.rowCount === 0 || (activity.earliest && activity.earliest <= metrics.window.start)));
-      return {
-        ...metrics,
-        coverage,
-        activityCoversWindow,
-        pointsSource: metrics.pointTransactionCount === 0 && activityCoversWindow ? 'no-activity' : metrics.pointsSource,
-        rewardMatchedCount: periodMatchedCount,
-        unmatchedRewardCount: Math.max(0, periodRewardCount - periodMatchedCount)
-      };
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.account.name.localeCompare(right.account.name) || left.account.last4.localeCompare(right.account.last4));
-}
-
-// end src/lib/calculations.js
-
-// ---- src/app/storage.js ----
-const STORAGE_KEY = 'ink-tracker-state-v1';
-
+// ---- packages/chase-core/app/storage.js ----
 function emptyState() {
   return {
     schemaVersion: 2,
@@ -892,38 +657,40 @@ function repairStateAccountMetadata(state) {
   return { ...state, accounts, coverage };
 }
 
-function createStorage() {
+function createStorage(options = {}) {
+  const storageKey = options.storageKey || 'ink-tracker-state-v1';
+  const label = options.label || 'Chase Tracker';
   const hasGm = typeof GM !== 'undefined' && typeof GM.getValue === 'function';
   return {
     async load() {
       try {
-        const value = hasGm ? await GM.getValue(STORAGE_KEY, null) : localStorage.getItem(STORAGE_KEY);
+        const value = hasGm ? await GM.getValue(storageKey, null) : localStorage.getItem(storageKey);
         const parsed = typeof value === 'string' ? JSON.parse(value) : value;
         if (!parsed) return emptyState();
         const loaded = { ...emptyState(), ...parsed, schemaVersion: 2 };
         loaded.transactions = reconcileTransactions(loaded.transactions ?? []);
         return loaded;
       } catch (error) {
-        console.warn('[Ink Tracker] Could not load local state.', error);
+        console.warn(`[${label}] Could not load local state.`, error);
         return emptyState();
       }
     },
     async save(state) {
       const next = { ...state, updatedAt: new Date().toISOString() };
-      if (hasGm) await GM.setValue(STORAGE_KEY, next);
-      else localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      if (hasGm) await GM.setValue(storageKey, next);
+      else localStorage.setItem(storageKey, JSON.stringify(next));
       return next;
     },
     async clear() {
-      if (hasGm && typeof GM.deleteValue === 'function') await GM.deleteValue(STORAGE_KEY);
-      else localStorage.removeItem(STORAGE_KEY);
+      if (hasGm && typeof GM.deleteValue === 'function') await GM.deleteValue(storageKey);
+      else localStorage.removeItem(storageKey);
     }
   };
 }
 
-// end src/app/storage.js
+// end packages/chase-core/app/storage.js
 
-// ---- src/app/chase-dom.js ----
+// ---- packages/chase-core/app/chase-dom.js ----
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function decodeHtmlEntities(value) {
@@ -933,45 +700,64 @@ function decodeHtmlEntities(value) {
     .replace(/&amp;/g, '&');
 }
 
-function extractChaseAccounts(html = document.documentElement?.innerHTML ?? '') {
-  const decoded = decodeHtmlEntities(String(html));
-  const accounts = [];
-  const pattern = /"value":"([^"]*Ink\s+Business[^"]*\(\.\.\.\d{4}\))"\s*}[\s\S]{0,1000}?{\s*"accountId":\s*"?(\d+)"?[\s\S]{0,300}?"accountType":"([^"]+)"[\s\S]{0,200}?"accountDetailType":"([^"]+)"/gi;
-  for (const match of decoded.matchAll(pattern)) {
-    const name = match[1].trim();
-    accounts.push({
-      id: match[2],
-      name,
-      last4: normalizeLast4(name),
-      accountType: match[3],
-      accountDetailType: match[4],
-      productId: identifyProduct(name)?.id ?? null,
-      source: 'chase-dom'
-    });
-  }
-  return [...new Map(accounts.map((account) => [account.id, account])).values()];
+function productFor(name, options = {}) {
+  return typeof options.identifyProduct === 'function' ? options.identifyProduct(name) : null;
 }
 
-function extractCurrentChaseAccount(doc = document, hash = location.hash) {
-  const route = String(hash).match(/#\/dashboard\/summary\/([^/]+)\/([^/]+)\/([^/?]+)/i);
-  if (!route) return null;
-  const bodyText = doc.body?.innerText ?? '';
-  const nameMatch = bodyText.match(/Account:\s*(Ink\s+Business[^\n]{0,80}?\(\.\.\.\d{4}\))/i)
-    ?? doc.title.match(/(Ink\s+Business[^|\-]{0,80}?\(\.\.\.\d{4}\))/i)
-    ?? bodyText.match(/(Ink\s+Business[^\n]{0,80}?\(\.\.\.\d{4}\))/i);
-  const name = nameMatch?.[1]?.trim() || `Ink card ${route[1]}`;
-  return {
+function accountIsSupported(account, options = {}) {
+  return typeof options.acceptsAccount === 'function' ? options.acceptsAccount(account) : Boolean(account.last4);
+}
+
+function accountFromRoute(name, route, options = {}) {
+  const account = {
     id: route[1],
     name,
     last4: normalizeLast4(name),
     accountType: route[2],
     accountDetailType: route[3],
-    productId: identifyProduct(name)?.id ?? null,
+    productId: productFor(name, options)?.id ?? null,
     source: 'chase-dom'
   };
+  return accountIsSupported(account, options) ? account : null;
 }
 
-function extractChaseActivity(doc = document, account = extractCurrentChaseAccount(doc)) {
+function extractChaseAccounts(html = document.documentElement?.innerHTML ?? '', options = {}) {
+  const decoded = decodeHtmlEntities(String(html));
+  const accounts = [];
+  const pattern = /"value":"([^"]{1,180}\(\.\.\.\d{4}\))"\s*}[\s\S]{0,1000}?{\s*"accountId":\s*"?(\d+)"?[\s\S]{0,300}?"accountType":"([^"]+)"[\s\S]{0,200}?"accountDetailType":"([^"]+)"/gi;
+  for (const match of decoded.matchAll(pattern)) {
+    const name = match[1].trim();
+    const account = {
+      id: match[2],
+      name,
+      last4: normalizeLast4(name),
+      accountType: match[3],
+      accountDetailType: match[4],
+      productId: productFor(name, options)?.id ?? null,
+      source: 'chase-dom'
+    };
+    if (accountIsSupported(account, options)) accounts.push(account);
+  }
+  return [...new Map(accounts.map((account) => [account.id, account])).values()];
+}
+
+function supportedNameFromText(text, options = {}) {
+  const candidates = [...String(text ?? '').matchAll(/([^\n|]{1,140}\(\.\.\.\d{4}\))/g)]
+    .map((match) => match[1].replace(/^.*?Account:\s*/i, '').trim());
+  return candidates.find((name) => accountIsSupported({ name, last4: normalizeLast4(name), productId: productFor(name, options)?.id ?? null }, options)) ?? '';
+}
+
+function extractCurrentChaseAccount(doc = document, hash = location.hash, options = {}) {
+  const route = String(hash).match(/#\/dashboard\/summary\/([^/]+)\/([^/]+)\/([^/?]+)/i);
+  if (!route) return null;
+  const bodyText = doc.body?.innerText ?? '';
+  const name = supportedNameFromText(`${bodyText}\n${doc.title ?? ''}`, options);
+  if (!name) return null;
+  return accountFromRoute(name, route, options);
+}
+
+function extractChaseActivity(doc = document, account = null, options = {}) {
+  account = account ?? extractCurrentChaseAccount(doc, typeof location === 'undefined' ? '' : location.hash, options);
   if (!account) return { accounts: [], transactions: [], reachedEnd: false, validEmpty: false };
   const rows = [...doc.querySelectorAll('.mds-activity-table__row[data-values], tr[data-values]')];
   const transactions = rows
@@ -1041,31 +827,32 @@ function scrollToActivityFooter(doc = document) {
   target?.scrollIntoView?.({ block: 'end', behavior: 'auto' });
 }
 
-async function waitForActivityControl(doc = document) {
+async function waitForActivityControl(doc = document, options = {}, account = null) {
   for (let poll = 0; poll < 16; poll += 1) {
-    const result = extractChaseActivity(doc);
+    const result = extractChaseActivity(doc, account, options);
     if (result.reachedEnd || (result.validEmpty && result.transactions.length === 0)) return { result, button: null };
     const button = findLoadMore(doc);
     if (button) return { result, button };
     scrollToActivityFooter(doc);
     await wait(250);
   }
-  return { result: extractChaseActivity(doc), button: findLoadMore(doc) };
+  return { result: extractChaseActivity(doc, account, options), button: findLoadMore(doc) };
 }
 
-async function waitForActivity(account, timeoutMs = 30_000) {
+async function waitForActivity(account, options = {}, timeoutMs = 30_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const current = extractCurrentChaseAccount();
-    const correctCard = current?.id === String(account.id)
-      && (!account.last4 || current.last4 === account.last4 || document.title.includes(account.last4));
+    const current = extractCurrentChaseAccount(document, location.hash, options);
+    const routeId = String(location.hash).match(/#\/dashboard\/summary\/([^/]+)/i)?.[1];
+    const correctCard = String(current?.id ?? routeId ?? '') === String(account.id)
+      && (!account.last4 || !current || current.last4 === account.last4 || document.title.includes(account.last4));
     if (correctCard && document.querySelector('mds-select-option[label="All transactions"], .mds-activity-table')) return true;
     await wait(250);
   }
   return false;
 }
 
-async function loadAllCurrentActivity(onProgress = () => {}) {
+async function loadAllCurrentActivity(onProgress = () => {}, options = {}, account = null) {
   const before = document.querySelectorAll('.mds-activity-table__row[data-values], tr[data-values]').length;
   const changedFilter = await clickAllTransactions();
   if (changedFilter) {
@@ -1082,7 +869,7 @@ async function loadAllCurrentActivity(onProgress = () => {}) {
   }
 
   for (let page = 0; page < 100; page += 1) {
-    const control = await waitForActivityControl();
+    const control = await waitForActivityControl(document, options, account);
     if (control.result.reachedEnd || (control.result.validEmpty && control.result.transactions.length === 0)) break;
     const button = control.button;
     if (!button) break;
@@ -1092,24 +879,25 @@ async function loadAllCurrentActivity(onProgress = () => {}) {
     for (let poll = 0; poll < 40; poll += 1) {
       await wait(250);
       const newCount = document.querySelectorAll('.mds-activity-table__row[data-values], tr[data-values]').length;
-      const result = extractChaseActivity();
+      const result = extractChaseActivity(document, account, options);
       if (newCount > oldCount || result.reachedEnd || !document.contains(button)) break;
     }
   }
-  const result = extractChaseActivity();
+  const result = extractChaseActivity(document, account, options);
   if (!result.reachedEnd && !(result.validEmpty && result.transactions.length === 0)) {
     throw new Error(`Chase did not confirm the end of this card's activity${result.transactions.length ? ` (${result.transactions.length} partial rows were ignored)` : ''}. No activity data was saved.`);
   }
   return result;
 }
 
-async function syncAllInkCards(onProgress = () => {}) {
+async function syncAllCards(onProgress = () => {}, options = {}) {
   const originalHash = location.hash;
-  const discovered = extractChaseAccounts();
-  const current = extractCurrentChaseAccount();
+  const discovered = extractChaseAccounts(document.documentElement?.innerHTML ?? '', options);
+  const current = extractCurrentChaseAccount(document, location.hash, options);
   const accounts = discovered.length ? discovered : current ? [current] : [];
   if (!accounts.length) {
-    throw new Error('No Ink cards were found. Open the Chase Accounts dashboard or an Ink card activity page, then retry.');
+    const label = options.cardLabel || 'supported cards';
+    throw new Error(`No ${label} were found. Open the Chase Accounts dashboard or a supported card activity page, then retry.`);
   }
 
   const result = { accounts, transactions: [], coverage: {} };
@@ -1120,10 +908,10 @@ async function syncAllInkCards(onProgress = () => {}) {
       const route = `#/dashboard/summary/${account.id}/${account.accountType || 'CARD'}/${account.accountDetailType || 'BCC'}`;
       if (location.hash !== route) {
         location.hash = route.slice(1);
-        const ready = await waitForActivity(account);
+        const ready = await waitForActivity(account, options);
         if (!ready) throw new Error(`Timed out while opening ${account.name}.`);
       }
-      const data = await loadAllCurrentActivity(onProgress);
+      const data = await loadAllCurrentActivity(onProgress, options, account);
       result.transactions.push(...data.transactions);
       const dates = data.transactions.map((transaction) => transaction.date).filter(Boolean).sort();
       result.coverage[account.id] = {
@@ -1142,9 +930,322 @@ async function syncAllInkCards(onProgress = () => {}) {
   return result;
 }
 
-// end src/app/chase-dom.js
+// end packages/chase-core/app/chase-dom.js
 
-// ---- src/app/rewards-dom.js ----
+// ---- packages/chase-core/app/capture.js ----
+const INTERESTING_URL = /(account|activity|transaction|reward|earn|spend|card)/i;
+
+function installChaseNetworkCapture(onNormalizedData, options = {}) {
+  const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  const marker = options.marker || '__chaseTrackerCaptureV1';
+  const requestUrlKey = `${marker}Url`;
+  const label = options.label || 'Chase Tracker';
+  const normalizePayload = options.normalizePayload
+    || ((payload, url) => extractNormalizedData(payload, url, options.normalizerOptions));
+  if (page[marker]) return { installed: true, reused: true };
+
+  const inspect = async (response, url) => {
+    try {
+      if (!INTERESTING_URL.test(String(url))) return;
+      const contentType = response.headers?.get?.('content-type') ?? '';
+      if (!/json/i.test(contentType)) return;
+      const payload = await response.clone().json();
+      const normalized = normalizePayload(payload, String(url));
+      if (normalized.accounts.length || normalized.transactions.length) onNormalizedData(normalized);
+    } catch {
+      // Chase responses that cannot be cloned or parsed are intentionally ignored.
+    }
+  };
+
+  try {
+    if (typeof page.fetch === 'function') {
+      const originalFetch = page.fetch;
+      page.fetch = async function chaseTrackerFetch(...args) {
+        const response = await originalFetch.apply(this, args);
+        const url = args[0]?.url ?? args[0] ?? response.url;
+        void inspect(response, url);
+        return response;
+      };
+    }
+
+    const xhrPrototype = page.XMLHttpRequest?.prototype;
+    if (xhrPrototype) {
+      const originalOpen = xhrPrototype.open;
+      const originalSend = xhrPrototype.send;
+      xhrPrototype.open = function chaseTrackerOpen(method, url, ...rest) {
+        this[requestUrlKey] = String(url);
+        return originalOpen.call(this, method, url, ...rest);
+      };
+      xhrPrototype.send = function chaseTrackerSend(...args) {
+        this.addEventListener('load', () => {
+          try {
+            if (!INTERESTING_URL.test(this[requestUrlKey]) || this.status < 200 || this.status >= 300) return;
+            const payload = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
+            const normalized = normalizePayload(payload, this[requestUrlKey]);
+            if (normalized.accounts.length || normalized.transactions.length) onNormalizedData(normalized);
+          } catch {
+            // Non-JSON and protected responses are ignored.
+          }
+        }, { once: true });
+        return originalSend.apply(this, args);
+      };
+    }
+    page[marker] = true;
+    return { installed: true, reused: false };
+  } catch (error) {
+    console.warn(`[${label}] Network capture was unavailable; DOM sync and CSV import still work.`, error);
+    return { installed: false, error: String(error) };
+  }
+}
+
+// end packages/chase-core/app/capture.js
+
+// ---- apps/ink/products.js ----
+const PRODUCT_RULES = Object.freeze([
+  {
+    id: 'ink-cash',
+    names: [/ink business cash/i, /ink cash/i],
+    label: 'Ink Business Cash®',
+    baseMultiplier: 1,
+    bonusMultiplier: 5,
+    annualCapCents: 2_500_000,
+    categoryLabel: '5× category (office · phone · internet · cable)',
+    qualifyingCategories: ['office_supplies', 'phone', 'internet', 'cable'],
+    secondaryTiers: [{ multiplier: 2, annualCapCents: 2_500_000, categories: ['gas', 'dining'] }]
+  },
+  {
+    id: 'ink-preferred',
+    names: [/ink business preferred/i, /ink preferred/i],
+    label: 'Ink Business Preferred®',
+    baseMultiplier: 1,
+    bonusMultiplier: 3,
+    annualCapCents: 15_000_000,
+    categoryLabel: '3× category (shipping · travel · ads · social · comms)',
+    qualifyingCategories: ['shipping', 'travel', 'advertising', 'social_media', 'phone', 'internet', 'cable']
+  },
+  {
+    id: 'ink-unlimited',
+    names: [/ink business unlimited/i, /ink unlimited/i],
+    label: 'Ink Business Unlimited®',
+    baseMultiplier: 1.5,
+    bonusMultiplier: 1.5,
+    annualCapCents: null,
+    categoryLabel: '1.5× on purchases',
+    qualifyingCategories: ['all']
+  },
+  {
+    id: 'ink-premier',
+    names: [/ink business premier/i, /ink premier/i],
+    label: 'Ink Business Premier℠',
+    baseMultiplier: 2,
+    bonusMultiplier: 2,
+    annualCapCents: null,
+    categoryLabel: '2× on purchases (2.5× on eligible $5,000+ purchases)',
+    qualifyingCategories: ['all'],
+    largePurchaseThresholdCents: 500_000,
+    largePurchaseMultiplier: 2.5
+  }
+]);
+
+function identifyProduct(accountOrName) {
+  const text = typeof accountOrName === 'string'
+    ? accountOrName
+    : `${accountOrName?.name ?? ''} ${accountOrName?.productName ?? ''}`;
+  return PRODUCT_RULES.find((rule) => rule.names.some((pattern) => pattern.test(text))) ?? null;
+}
+
+function getProductRule(productId, fallbackName = '') {
+  return PRODUCT_RULES.find((rule) => rule.id === productId) ?? identifyProduct(fallbackName);
+}
+
+function isInkAccount(account) {
+  return Boolean(identifyProduct(account));
+}
+
+// end apps/ink/products.js
+
+// ---- apps/ink/calculations.js ----
+function transactionQualifies(transaction, rule) {
+  if (!transaction || isPending(transaction) || transaction.kind === 'payment' || transaction.kind === 'non_purchase') return false;
+  if (rule.qualifyingCategories.includes('all')) return true;
+  if (!rule.qualifyingCategories.includes(transaction.category)) return false;
+  if (Number.isFinite(transaction.reportedMultiplier) && transaction.reportedMultiplier > 0) {
+    return transaction.reportedMultiplier >= rule.bonusMultiplier;
+  }
+  return true;
+}
+
+function estimateTransactionMultiplier(transaction, rule) {
+  if (Number.isFinite(transaction.reportedMultiplier) && transaction.reportedMultiplier > 0) return transaction.reportedMultiplier;
+  if (rule.largePurchaseThresholdCents && transaction.spendCents >= rule.largePurchaseThresholdCents) {
+    return rule.largePurchaseMultiplier;
+  }
+  if (transactionQualifies(transaction, rule)) return rule.bonusMultiplier;
+  const secondary = rule.secondaryTiers?.find((tier) => tier.categories.includes(transaction.category));
+  return secondary?.multiplier ?? rule.baseMultiplier;
+}
+
+function sum(values) {
+  return values.reduce((total, value) => total + (Number(value) || 0), 0);
+}
+
+function rewardMatchesForAccount(transactions, rewardRecords, account) {
+  const available = transactions
+    .map((transaction, index) => ({ transaction, index }))
+    .filter(({ transaction }) => belongsToAccount(transaction, account)
+      && !isPending(transaction)
+      && !['payment', 'non_purchase'].includes(transaction.kind));
+  const pairs = [];
+  for (let rewardIndex = 0; rewardIndex < rewardRecords.length; rewardIndex += 1) {
+    const reward = rewardRecords[rewardIndex];
+    for (const candidate of available) {
+      if (Math.abs(candidate.transaction.spendCents) !== Math.abs(reward.amountCents)) continue;
+      if (Number(reward.reportedPoints) < 0 && candidate.transaction.spendCents >= 0) continue;
+      if (Number(reward.reportedPoints) > 0 && candidate.transaction.spendCents < 0) continue;
+      const days = dateDistanceDays(candidate.transaction.date, reward.date);
+      if (days > 7) continue;
+      const similarity = merchantSimilarity(candidate.transaction.description, reward.description);
+      if (similarity < 0.45) continue;
+      pairs.push({
+        ...candidate,
+        reward,
+        rewardIndex,
+        similarity,
+        score: similarity * 100 - days * 4 + (days === 0 ? 5 : 0)
+      });
+    }
+  }
+  pairs.sort((left, right) => right.score - left.score);
+  const usedTransactions = new Set();
+  const usedRewards = new Set();
+  const matches = [];
+  for (const pair of pairs) {
+    if (usedTransactions.has(pair.index) || usedRewards.has(pair.rewardIndex)) continue;
+    usedTransactions.add(pair.index);
+    usedRewards.add(pair.rewardIndex);
+    matches.push(pair);
+  }
+  return matches;
+}
+
+function scoreRewardAccount(transactions, rewardRecords, account) {
+  return rewardMatchesForAccount(transactions, rewardRecords, account).length;
+}
+
+function applyRewardEnrichment(transactions, rewardRecords, account) {
+  const relevantRewards = rewardRecords.filter((reward) => !reward.accountId || String(reward.accountId) === String(account.id));
+  const enriched = transactions.map((transaction) => ({ ...transaction }));
+  const matches = rewardMatchesForAccount(enriched, relevantRewards, account);
+  for (const match of matches) {
+    const transaction = enriched[match.index];
+    transaction.reportedMultiplier = match.reward.reportedMultiplier;
+    transaction.reportedPoints = match.reward.reportedPoints;
+    transaction.rewardMatched = true;
+  }
+  return { transactions: enriched, matchedCount: matches.length, rewardCount: relevantRewards.length };
+}
+
+function calculateCardMetrics(account, transactions, config = {}, asOf = new Date()) {
+  const rule = getProductRule(config.productId ?? account.productId, account.name);
+  if (!rule) return null;
+  const anniversary = getAnniversaryWindow(asOf, config.anniversaryMonth, config.anniversaryDay);
+  const window = anniversary ?? getCalendarYearWindow(asOf);
+  const allPeriodTransactions = transactions.filter((transaction) =>
+    belongsToAccount(transaction, account) && dateIsInWindow(transaction.date, window)
+  );
+  const pendingTransactionCount = allPeriodTransactions.filter(isPending).length;
+  const periodTransactions = allPeriodTransactions.filter((transaction) => !isPending(transaction));
+  const purchaseTransactions = periodTransactions.filter((transaction) => !['payment', 'non_purchase'].includes(transaction.kind));
+  const qualifyingTransactions = purchaseTransactions.filter((transaction) => transactionQualifies(transaction, rule));
+  const totalSpendCents = Math.max(0, sum(purchaseTransactions.map((transaction) => transaction.spendCents)));
+  const rawQualifyingSpendCents = Math.max(0, sum(qualifyingTransactions.map((transaction) => transaction.spendCents)));
+  const capCents = rule.annualCapCents;
+  const qualifyingSpendCents = capCents === null
+    ? rawQualifyingSpendCents
+    : Math.min(rawQualifyingSpendCents, capCents);
+  const remainingCents = capCents === null ? null : Math.max(0, capCents - qualifyingSpendCents);
+  const basePoints = Math.round((totalSpendCents / 100) * rule.baseMultiplier);
+  const bonusPoints = Math.round((qualifyingSpendCents / 100) * Math.max(0, rule.bonusMultiplier - rule.baseMultiplier));
+  const secondaryBonusPoints = sum((rule.secondaryTiers ?? []).map((tier) => {
+    const tierSpend = Math.max(0, sum(purchaseTransactions
+      .filter((transaction) => tier.categories.includes(transaction.category))
+      .map((transaction) => transaction.spendCents)));
+    const cappedTierSpend = Math.min(tierSpend, tier.annualCapCents ?? tierSpend);
+    return Math.round((cappedTierSpend / 100) * (tier.multiplier - rule.baseMultiplier));
+  }));
+  const largePurchaseBonusPoints = rule.largePurchaseThresholdCents
+    ? Math.round(sum(purchaseTransactions
+      .filter((transaction) => transaction.spendCents >= rule.largePurchaseThresholdCents)
+      .map((transaction) => (transaction.spendCents / 100) * (rule.largePurchaseMultiplier - rule.baseMultiplier))))
+    : 0;
+  const capturedPointsValues = purchaseTransactions
+    .map((transaction) => transaction.reportedPoints)
+    .filter((value) => Number.isFinite(value));
+  const inferredCount = qualifyingTransactions.filter((transaction) => transaction.categorySource === 'merchant' && !transaction.rewardMatched).length;
+  const estimatedPoints = basePoints + bonusPoints + secondaryBonusPoints + largePurchaseBonusPoints;
+  const exactPointCoverage = purchaseTransactions.length > 0 && capturedPointsValues.length === purchaseTransactions.length;
+  const capturedPoints = capturedPointsValues.length ? Math.round(sum(capturedPointsValues)) : null;
+
+  return {
+    account,
+    rule,
+    window,
+    windowSource: anniversary ? 'anniversary' : 'calendar-fallback',
+    qualifyingSpendCents,
+    uncappedQualifyingSpendCents: rawQualifyingSpendCents,
+    capCents,
+    remainingCents,
+    usedPercent: capCents ? Math.min(100, (qualifyingSpendCents / capCents) * 100) : null,
+    totalSpendCents,
+    basePoints,
+    bonusPoints,
+    secondaryBonusPoints,
+    largePurchaseBonusPoints,
+    estimatedPoints,
+    capturedPoints,
+    displayPoints: exactPointCoverage ? capturedPoints : estimatedPoints,
+    pointsSource: exactPointCoverage ? 'rewards' : 'estimated',
+    pointCoverageCount: capturedPointsValues.length,
+    pointTransactionCount: purchaseTransactions.length,
+    transactionCount: periodTransactions.length,
+    pendingTransactionCount,
+    qualifyingTransactionCount: qualifyingTransactions.length,
+    inferredCount,
+    periodTransactions
+  };
+}
+
+function calculateAllCards(state, asOf = new Date()) {
+  return state.accounts
+    .map((account) => {
+      const enrichment = applyRewardEnrichment(state.transactions, state.rewardRecords ?? [], account);
+      const metrics = calculateCardMetrics(account, enrichment.transactions, state.cardConfig?.[account.id] ?? {}, asOf);
+      if (!metrics) return null;
+      const periodRewardCount = (state.rewardRecords ?? []).filter((reward) =>
+        (!reward.accountId || String(reward.accountId) === String(account.id))
+        && dateIsInWindow(reward.date, metrics.window)
+      ).length;
+      const periodMatchedCount = metrics.periodTransactions.filter((transaction) => transaction.rewardMatched).length;
+      const coverage = state.coverage?.[account.id] ?? {};
+      const activity = coverage.activity;
+      const activityCoversWindow = Boolean(activity?.complete
+        && (activity.rowCount === 0 || (activity.earliest && activity.earliest <= metrics.window.start)));
+      return {
+        ...metrics,
+        coverage,
+        activityCoversWindow,
+        pointsSource: metrics.pointTransactionCount === 0 && activityCoversWindow ? 'no-activity' : metrics.pointsSource,
+        rewardMatchedCount: periodMatchedCount,
+        unmatchedRewardCount: Math.max(0, periodRewardCount - periodMatchedCount)
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.account.name.localeCompare(right.account.name) || left.account.last4.localeCompare(right.account.last4));
+}
+
+// end apps/ink/calculations.js
+
+// ---- apps/ink/rewards-dom.js ----
 const rewardsWait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function parsePoints(value) {
@@ -1217,73 +1318,9 @@ async function loadRewardsActivity(onProgress = () => {}) {
   throw new Error(`Ultimate Rewards did not reach the end of the transaction list${result.rewardRecords.length ? ` (${result.rewardRecords.length} partial rows were ignored)` : ''}. No rewards data was saved.`);
 }
 
-// end src/app/rewards-dom.js
+// end apps/ink/rewards-dom.js
 
-// ---- src/app/capture.js ----
-const INTERESTING_URL = /(account|activity|transaction|reward|earn|spend|card)/i;
-
-function installChaseNetworkCapture(onNormalizedData) {
-  const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const marker = '__inkTrackerCaptureV1';
-  if (page[marker]) return { installed: true, reused: true };
-
-  const inspect = async (response, url) => {
-    try {
-      if (!INTERESTING_URL.test(String(url))) return;
-      const contentType = response.headers?.get?.('content-type') ?? '';
-      if (!/json/i.test(contentType)) return;
-      const payload = await response.clone().json();
-      const normalized = extractNormalizedData(payload, String(url));
-      if (normalized.accounts.length || normalized.transactions.length) onNormalizedData(normalized);
-    } catch {
-      // Chase responses that cannot be cloned or parsed are intentionally ignored.
-    }
-  };
-
-  try {
-    if (typeof page.fetch === 'function') {
-      const originalFetch = page.fetch;
-      page.fetch = async function inkTrackerFetch(...args) {
-        const response = await originalFetch.apply(this, args);
-        const url = args[0]?.url ?? args[0] ?? response.url;
-        void inspect(response, url);
-        return response;
-      };
-    }
-
-    const xhrPrototype = page.XMLHttpRequest?.prototype;
-    if (xhrPrototype) {
-      const originalOpen = xhrPrototype.open;
-      const originalSend = xhrPrototype.send;
-      xhrPrototype.open = function inkTrackerOpen(method, url, ...rest) {
-        this.__inkTrackerUrl = String(url);
-        return originalOpen.call(this, method, url, ...rest);
-      };
-      xhrPrototype.send = function inkTrackerSend(...args) {
-        this.addEventListener('load', () => {
-          try {
-            if (!INTERESTING_URL.test(this.__inkTrackerUrl) || this.status < 200 || this.status >= 300) return;
-            const payload = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
-            const normalized = extractNormalizedData(payload, this.__inkTrackerUrl);
-            if (normalized.accounts.length || normalized.transactions.length) onNormalizedData(normalized);
-          } catch {
-            // Non-JSON and protected responses are ignored.
-          }
-        }, { once: true });
-        return originalSend.apply(this, args);
-      };
-    }
-    page[marker] = true;
-    return { installed: true, reused: false };
-  } catch (error) {
-    console.warn('[Ink Tracker] Network capture was unavailable; DOM sync and CSV import still work.', error);
-    return { installed: false, error: String(error) };
-  }
-}
-
-// end src/app/capture.js
-
-// ---- src/app/ui.js ----
+// ---- apps/ink/ui.js ----
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const preciseMoney = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 const integer = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
@@ -1666,7 +1703,7 @@ function createInkTrackerUi(handlers) {
     <div class="backdrop" role="presentation">
       <section class="modal" role="dialog" aria-modal="true" aria-label="Ink Tracker">
         <header class="header">
-          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v0.9.7</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
+          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v1.0.0</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
           <nav class="controls">
             <button data-view="summary" class="active">Summary</button>
             <button data-view="detail">Detailed</button>
@@ -1789,11 +1826,17 @@ function createInkTrackerUi(handlers) {
   };
 }
 
-// end src/app/ui.js
+// end apps/ink/ui.js
 
-// ---- src/main.js ----
+// ---- apps/ink/main.js ----
+const INK_CHASE_OPTIONS = Object.freeze({
+  identifyProduct,
+  acceptsAccount: isInkAccount,
+  cardLabel: 'Ink cards'
+});
+
 void (async function startInkTracker() {
-  const storage = createStorage();
+  const storage = createStorage({ storageKey: 'ink-tracker-state-v1', label: 'Ink Tracker' });
   const pendingCapture = [];
   let state = null;
   let ui = null;
@@ -1828,7 +1871,11 @@ void (async function startInkTracker() {
     void save(next);
   }
 
-  const captureStatus = installChaseNetworkCapture(acceptCapture);
+  const captureStatus = installChaseNetworkCapture(acceptCapture, {
+    marker: '__inkTrackerCaptureV2',
+    label: 'Ink Tracker',
+    normalizePayload: (payload, url) => extractNormalizedData(payload, url, INK_CHASE_OPTIONS)
+  });
   state = repairStateAccountMetadata(await storage.load());
   for (const captured of pendingCapture) {
     state = mergeState(state, { ...captured, transactions: [], payloadCount: 1 }, 'network');
@@ -1921,7 +1968,7 @@ void (async function startInkTracker() {
       batchingCapture = true;
       batchedCaptures = [];
       try {
-        const data = await syncAllInkCards(progress);
+        const data = await syncAllCards(progress, INK_CHASE_OPTIONS);
         await new Promise((resolve) => setTimeout(resolve, 250));
         let draftState = mergeState(emptyState(), data, 'chase-dom');
         for (const captured of batchedCaptures) {
@@ -2102,8 +2149,8 @@ void (async function startInkTracker() {
     if (location.hostname !== 'secure.chase.com') return;
     if (batchingCapture || state.rewardSync?.active) return;
     if (foundAccountMetadata) return;
-    const accounts = extractChaseAccounts();
-    const activity = extractChaseActivity();
+    const accounts = extractChaseAccounts(document.documentElement?.innerHTML ?? '', INK_CHASE_OPTIONS);
+    const activity = extractChaseActivity(document, null, INK_CHASE_OPTIONS);
     if (!accounts.length && !activity.accounts.length) return;
     foundAccountMetadata = true;
     await save(mergeState(state, {
@@ -2124,5 +2171,5 @@ void (async function startInkTracker() {
   void scanCurrentPage();
 })();
 
-// end src/main.js
+// end apps/ink/main.js
 })();

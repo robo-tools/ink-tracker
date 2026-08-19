@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyRewardEnrichment, calculateAllCards, calculateCardMetrics, scoreRewardAccount } from '../src/lib/calculations.js';
+import { applyRewardEnrichment, calculateAllCards, calculateCardMetrics, scoreRewardAccount } from '../apps/ink/calculations.js';
 
 const account = { id: 'cash-1', name: 'Ink Business Cash', last4: '1111', productId: 'ink-cash' };
 
@@ -66,7 +66,7 @@ test('an authoritative 1x reward overrides merchant category inference', () => {
 });
 
 test('legacy zero multipliers fall back to the calculated card rate', async () => {
-  const { estimateTransactionMultiplier } = await import('../src/lib/calculations.js');
+  const { estimateTransactionMultiplier } = await import('../apps/ink/calculations.js');
   const metrics = calculateCardMetrics(account, [
     transaction({ spendCents: 12_500, category: 'office_supplies', reportedMultiplier: 0 })
   ], {}, '2026-08-19');

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDetailRows } from '../src/app/ui.js';
-import { getProductRule } from '../src/lib/products.js';
+import { buildDetailRows } from '../apps/ink/ui.js';
+import { getProductRule } from '../apps/ink/products.js';
 
 const rule = getProductRule('ink-cash');
 const metrics = [

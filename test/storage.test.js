@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { commitFullSync, emptyState, mergeRewardRecords, mergeState, mergeSupplementalTransactions, mergeTransactions, reconcileTransactions, repairStateAccountMetadata } from '../src/app/storage.js';
+import { commitFullSync, emptyState, mergeRewardRecords, mergeState, mergeSupplementalTransactions, mergeTransactions, reconcileTransactions, repairStateAccountMetadata } from '../packages/chase-core/app/storage.js';
 
 test('account merges preserve a known last four when a later scan omits it', () => {
   const current = {
