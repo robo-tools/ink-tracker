@@ -15,16 +15,14 @@
         { id: 'p1', accountId: 'personal-1234', last4: '1234', date: '2025-02-10', description: 'First purchase', amountCents: 480000, spendCents: 480000, kind: 'purchase', status: 'posted', source: 'chase-dom' },
         { id: 'p2', accountId: 'personal-1234', last4: '1234', date: '2026-03-10', description: 'Hyatt Regency', amountCents: 125000, spendCents: 125000, kind: 'purchase', status: 'posted', source: 'chase-dom' },
         { id: 'p3', accountId: 'personal-1234', last4: '1234', date: '2026-04-10', description: 'Annual Fee', amountCents: 9500, spendCents: 0, kind: 'non_purchase', status: 'posted', source: 'chase-dom' },
-        { id: 'b1', accountId: 'business-5678', last4: '5678', date: '2026-01-15', description: 'Business purchase', amountCents: 1350000, spendCents: 1350000, kind: 'purchase', status: 'posted', source: 'chase-dom' }
+        { id: 'b1', accountId: 'business-5678', last4: '5678', date: '2026-02-15', description: 'Business purchase', amountCents: 1350000, spendCents: 1350000, kind: 'purchase', status: 'posted', source: 'chase-csv' }
       ],
       rewardRecords: [],
       coverage: {
         'personal-1234': { activity: { complete: true, rowCount: 3, earliest: '2025-02-10', latest: '2026-04-10' } },
-        'business-5678': { activity: { complete: true, rowCount: 1, earliest: '2026-01-15', latest: '2026-01-15' } }
+        'business-5678': { activity: { complete: false, rowCount: 1, earliest: '2026-02-15', latest: '2026-02-15', source: 'chase-csv' } }
       },
-      cardConfig: {
-        'business-5678': { productId: 'hyatt-business', yearHistoryConfirmed: 2026 }
-      },
+      cardConfig: {},
       captureStats: { payloads: 4, lastSource: 'chase-dom', lastCapturedAt: '2026-08-19T20:00:00.000Z' },
       updatedAt: '2026-08-19T20:00:00.000Z'
     };

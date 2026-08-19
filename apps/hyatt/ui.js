@@ -75,11 +75,11 @@ function businessCard(metric) {
       <div><h3>${escapeHtml(displayAccountName(metric.account.name))} <span class="last4">(…${escapeHtml(metric.account.last4)})</span></h3><p>Business card · counter resets January 1</p></div>
       <div class="nights"><strong>${metric.cardNightsYtd.toLocaleString()}</strong><span>card nights in ${year}</span></div>
     </div>
-    <div class="rule-row"><strong>5 elite nights per $10,000</strong>${statusBadge(metric)}${metric.yearHistoryVerified ? `<button class="inline-link" data-setup="${escapeHtml(metric.account.id)}">Edit coverage</button>` : ''}</div>
+    <div class="rule-row"><strong>5 elite nights per $10,000</strong>${statusBadge(metric)}</div>
     ${progressBar(metric.progressCents, metric.rule.thresholdCents)}
     <div class="spend-line"><strong>${money(metric.progressCents)}</strong> / ${money(metric.rule.thresholdCents)} toward the next 5 nights · <span class="muted">${money(nextSpend)} remaining</span></div>
     <div class="breakdown"><span>${money(metric.currentYearSpendCents)} qualifying spend in ${year}</span><strong>${metric.qualifyingTransactionCount} qualifying transactions</strong></div>
-    ${metric.yearHistoryVerified ? '' : `<div class="coverage-note"><span>The total is calculated, but activity before the oldest captured transaction has not been confirmed.</span><button class="primary" data-setup="${escapeHtml(metric.account.id)}">Verify coverage</button></div>`}
+    ${metric.yearHistoryVerified ? '' : `<div class="coverage-note"><span>This imported or partial history may omit ${year} purchases. Confirm it includes every posted transaction since January 1.</span><button class="primary" data-confirm-year="${escapeHtml(metric.account.id)}">Confirm ${year} complete</button></div>`}
   </article>`;
 }
 
@@ -96,8 +96,7 @@ function summaryView(metrics) {
 }
 
 export function findHyattSetupTarget(metrics) {
-  return metrics.find((metric) => metric.setupStatus === 'setup-needed'
-    || (metric.rule.type === 'business' && !metric.yearHistoryVerified)) ?? null;
+  return metrics.find((metric) => metric.setupStatus === 'setup-needed') ?? null;
 }
 
 export function buildHyattDetailRows(metrics, filters = { cardId: 'all', mode: 'eligible' }) {
@@ -189,21 +188,8 @@ function personalSetup(metric) {
   </section>`;
 }
 
-function businessSetup(metric) {
-  const year = Number(metric.yearWindow.start.slice(0, 4));
-  return `<section class="setup-view"><button class="back-link" data-action="setup-back">← Back to summary</button>
-    <h2>Verify …${escapeHtml(metric.account.last4)} coverage</h2>
-    <p class="setup-lead">The business-card counter resets every January 1, so only ${year} activity is needed.</p>
-    <form data-setup-form data-account-id="${escapeHtml(metric.account.id)}" data-product-type="business">
-      <div class="method-note"><strong>Oldest captured transaction</strong><span>${escapeHtml(metric.coverage.earliest ?? 'No posted transactions')}</span></div>
-      <label class="check"><input type="checkbox" name="yearHistoryConfirmed" ${metric.yearHistoryVerified ? 'checked' : ''}><span>I confirm there were no missing qualifying purchases between January 1 and the oldest captured transaction.</span></label>
-      <div class="setup-actions"><button type="submit" class="primary">Save coverage</button><button type="button" data-action="setup-back">Cancel</button></div>
-    </form>
-  </section>`;
-}
-
 function setupView(metric) {
-  return metric.rule.type === 'personal' ? personalSetup(metric) : businessSetup(metric);
+  return personalSetup(metric);
 }
 
 function itemDateRange(items) {
@@ -274,7 +260,7 @@ export function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.0.1</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.0.2</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden>`;
@@ -317,6 +303,15 @@ export function createHyattTrackerUi(handlers) {
     const target = event.target.closest('button');
     if (!target) return;
     if (target.dataset.setup) { setupAccountId = target.dataset.setup; render(); return; }
+    if (target.dataset.confirmYear) {
+      const accountId = target.dataset.confirmYear;
+      const metric = metrics().find((item) => String(item.account.id) === String(accountId));
+      const year = metric?.yearWindow.start.slice(0, 4) ?? new Date().getFullYear();
+      if (confirm(`Confirm that the tracker includes every posted transaction for this card since January 1, ${year}?`)) {
+        await run((progress) => handlers.saveSetup(accountId, { yearHistoryConfirmed: true }, progress), `Confirming ${year} coverage…`);
+      }
+      return;
+    }
     if (target.dataset.detailCard) { detailFilters = { ...detailFilters, cardId: target.dataset.detailCard }; render(); return; }
     if (target.dataset.detailMode) { detailFilters = { ...detailFilters, mode: target.dataset.detailMode }; render(); return; }
     if (target.dataset.view) { setupAccountId = null; view = target.dataset.view; render(); return; }

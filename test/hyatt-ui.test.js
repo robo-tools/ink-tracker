@@ -24,7 +24,8 @@ test('a completed refresh leads directly to the first card needing user setup', 
   const businessNeedsCoverage = { account: { id: 'business' }, rule: { type: 'business' }, setupStatus: 'calendar-year', yearHistoryVerified: false };
   const personalNeedsSetup = { account: { id: 'personal' }, rule: { type: 'personal' }, setupStatus: 'setup-needed', yearHistoryVerified: false };
 
-  assert.equal(findHyattSetupTarget([readyPersonal, businessNeedsCoverage, personalNeedsSetup]), businessNeedsCoverage);
+  assert.equal(findHyattSetupTarget([readyPersonal, businessNeedsCoverage, personalNeedsSetup]), personalNeedsSetup);
+  assert.equal(findHyattSetupTarget([businessNeedsCoverage]), null);
   assert.equal(findHyattSetupTarget([readyPersonal]), null);
 });
 

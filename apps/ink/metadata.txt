@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ink Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.0.1
+// @version      1.0.2
 // @description  Tracks Chase Ink bonus-category spend, anniversary caps, and verified or estimated points locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker

@@ -38,11 +38,10 @@ function coverageFor(state, account) {
 
 function calendarHistoryVerified(config, coverage, year, benefitStartDate = '') {
   const yearStart = `${year}-01-01`;
-  if (benefitStartDate && benefitStartDate >= yearStart) return Boolean(config.historyConfirmed);
   if (Number(config.yearHistoryConfirmed) === year) return true;
-  if (!coverage.listEndVerified) return false;
-  if (coverage.rowCount === 0 || (coverage.earliest && coverage.earliest <= yearStart)) return true;
-  return false;
+  if (benefitStartDate && benefitStartDate >= yearStart) return Boolean(config.historyConfirmed);
+  if (coverage.listEndVerified) return true;
+  return Boolean(coverage.earliest && coverage.earliest <= yearStart);
 }
 
 function setupStatus(rule, config) {

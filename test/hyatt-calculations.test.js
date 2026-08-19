@@ -81,13 +81,30 @@ test('business card earns five nights per calendar-year $10,000 and resets Janua
     transaction(business, '2026-01-02', 1_500_000),
     transaction(business, '2026-04-02', 700_000),
     transaction(business, '2026-05-02', -100_000)
-  ], { yearHistoryConfirmed: 2026 }, { listEndVerified: true, earliest: '2025-12-31', rowCount: 4 }, '2026-08-19');
+  ], {}, { listEndVerified: true, earliest: '2026-01-02', rowCount: 4 }, '2026-08-19');
 
   assert.equal(metrics.currentYearSpendCents, 2_100_000);
   assert.equal(metrics.progressCents, 100_000);
   assert.equal(metrics.spendNightsYtd, 10);
   assert.equal(metrics.cardNightsYtd, 10);
   assert.equal(metrics.yearHistoryVerified, true);
+});
+
+test('business coverage is automatic when captured activity reaches January 1', () => {
+  const metrics = calculateHyattCardMetrics(business, [
+    transaction(business, '2025-12-20', 10_000),
+    transaction(business, '2026-03-02', 500_000)
+  ], {}, { listEndVerified: false, earliest: '2025-12-20', rowCount: 2 }, '2026-08-19');
+
+  assert.equal(metrics.yearHistoryVerified, true);
+});
+
+test('business coverage remains unverified for a partial import beginning after January 1', () => {
+  const metrics = calculateHyattCardMetrics(business, [
+    transaction(business, '2026-03-02', 500_000)
+  ], {}, { listEndVerified: false, earliest: '2026-03-02', rowCount: 1 }, '2026-08-19');
+
+  assert.equal(metrics.yearHistoryVerified, false);
 });
 
 test('payments, pending charges, fees, and cash-like transactions do not qualify', () => {

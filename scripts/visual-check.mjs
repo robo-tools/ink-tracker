@@ -15,6 +15,14 @@ const summary = await page.locator('#hyatt-tracker-root').evaluate((host) => ({
   bodyScrollWidth: host.shadowRoot.querySelector('.body').scrollWidth,
   bodyClientWidth: host.shadowRoot.querySelector('.body').clientWidth
 }));
+page.once('dialog', (dialog) => dialog.accept());
+await page.locator('#hyatt-tracker-root').evaluate((host) => host.shadowRoot.querySelector('[data-confirm-year]').click());
+await page.waitForTimeout(600);
+const businessConfirmation = await page.locator('#hyatt-tracker-root').evaluate((host) => ({
+  openedSetupScreen: Boolean(host.shadowRoot.querySelector('.setup-view')),
+  confirmationButtonRemaining: Boolean(host.shadowRoot.querySelector('[data-confirm-year]')),
+  verifiedBadgeVisible: [...host.shadowRoot.querySelectorAll('.badge.good')].some((badge) => /calendar-year history/i.test(badge.textContent))
+}));
 await page.locator('#hyatt-tracker-root').evaluate((host) => host.shadowRoot.querySelector('[data-setup="personal-1234"]').click());
 await page.waitForTimeout(100);
 await page.screenshot({ path: 'test/fixtures/hyatt-setup-render.png', fullPage: true });
@@ -37,5 +45,5 @@ const mobile = await mobilePage.locator('#hyatt-tracker-root').evaluate((host) =
   setupButtonVisible: Boolean(host.shadowRoot.querySelector('.setup-callout [data-setup]')?.getClientRects().length)
 }));
 
-console.log(JSON.stringify({ errors, summary, setup, mobile }, null, 2));
+console.log(JSON.stringify({ errors, summary, businessConfirmation, setup, mobile }, null, 2));
 await browser.close();

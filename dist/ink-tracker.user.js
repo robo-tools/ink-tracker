@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ink Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.0.1
+// @version      1.0.2
 // @description  Tracks Chase Ink bonus-category spend, anniversary caps, and verified or estimated points locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -1703,7 +1703,7 @@ function createInkTrackerUi(handlers) {
     <div class="backdrop" role="presentation">
       <section class="modal" role="dialog" aria-modal="true" aria-label="Ink Tracker">
         <header class="header">
-          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v1.0.1</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
+          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v1.0.2</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
           <nav class="controls">
             <button data-view="summary" class="active">Summary</button>
             <button data-view="detail">Detailed</button>
