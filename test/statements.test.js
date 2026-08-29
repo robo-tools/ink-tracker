@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parseChaseStatementPages, pdfTextItemsToLines } from '../packages/chase-core/lib/statements.js';
 import {
   extractStatementDocuments,
+  elementIsVisible,
   mergeStatementCoverage,
   selectedStatementYear,
   statementAccountButton,
@@ -113,7 +114,7 @@ test('statement discovery derives the date from Chase table rows when the PDF li
   };
   const root = {
     querySelectorAll: () => [anchor],
-    querySelector: (selector) => selector === '#header-documentsAccordion-1'
+    querySelector: (selector) => selector === '#button-documentsAccordion-1'
       ? { textContent: 'WORLD OF HYATT (...1234)' }
       : null
   };
@@ -124,6 +125,20 @@ test('statement discovery derives the date from Chase table rows when the PDF li
     accountDocumentId: 'account-document-id',
     accountLabel: 'WORLD OF HYATT (...1234)'
   }]);
+});
+
+test('statement discovery ignores a loader mounted inside a hidden Chase container', () => {
+  const hiddenParent = {
+    hidden: false,
+    classList: { contains: (name) => name === 'hide' },
+    parentElement: null
+  };
+  const spinner = {
+    hidden: false,
+    classList: { contains: () => false },
+    parentElement: hiddenParent
+  };
+  assert.equal(elementIsVisible(spinner), false);
 });
 
 test('statement coverage only becomes complete with continuous start-to-recent periods', () => {

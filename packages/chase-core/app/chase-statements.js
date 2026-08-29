@@ -77,12 +77,18 @@ function statementDateForAnchor(anchor) {
   return compactStatementDate(dateCell?.textContent ?? row?.textContent ?? anchor.textContent);
 }
 
+function statementAccountLabel(root, index) {
+  return root.querySelector(`#header-documentsAccordion-${index}`)?.textContent
+    || root.querySelector(`#button-documentsAccordion-${index}`)?.textContent
+    || '';
+}
+
 export function extractStatementDocuments(root = document, wantedLast4 = '') {
   const documents = new Map();
   for (const anchor of root.querySelectorAll('a[data-documentid]')) {
     if (!/requestThisDocumentAnchor-(?:pdf|download)$/i.test(anchor.id ?? '')) continue;
     const match = anchor.id.match(/accountsTable-(\d+)-/);
-    const heading = match ? root.querySelector(`#header-documentsAccordion-${match[1]}`)?.textContent : '';
+    const heading = match ? statementAccountLabel(root, match[1]) : '';
     const last4 = normalizeLast4(heading);
     if (wantedLast4 && last4 !== wantedLast4) continue;
     const documentId = String(anchor.dataset.documentid ?? '').trim();
@@ -104,11 +110,16 @@ export function statementAccountButton(root = document, wantedLast4 = '') {
     .find((button) => normalizeLast4(button.textContent) === wantedLast4) ?? null;
 }
 
-function elementIsVisible(element) {
-  if (!element || element.hidden || element.classList?.contains('hide')) return false;
-  if (typeof getComputedStyle !== 'function') return true;
-  const style = getComputedStyle(element);
-  return style.display !== 'none' && style.visibility !== 'hidden';
+export function elementIsVisible(element) {
+  if (!element) return false;
+  for (let current = element; current; current = current.parentElement) {
+    if (current.hidden || current.classList?.contains('hide')) return false;
+    if (typeof getComputedStyle === 'function') {
+      const style = getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+  }
+  return true;
 }
 
 async function expandStatementAccount(wantedLast4, year, signal) {
@@ -121,12 +132,13 @@ async function expandStatementAccount(wantedLast4, year, signal) {
   await waitFor(() => {
     assertNotCancelled(signal);
     button = statementAccountButton(document, wantedLast4);
-    if (!button || button.getAttribute('aria-expanded') !== 'true') return false;
+    if (!button) return false;
     const blockId = button.getAttribute('aria-controls');
     const block = blockId ? document.getElementById(blockId) : null;
     if (!block) return false;
     const documents = extractStatementDocuments(document, wantedLast4);
     if (documents.length) return documents.every((item) => item.statementDate.startsWith(String(year)));
+    if (button.getAttribute('aria-expanded') !== 'true') return false;
     return ![...block.querySelectorAll('[id^="spinner-payments-"]')].some(elementIsVisible);
   }, `Chase did not finish loading statements for card …${wantedLast4}.`, 30_000);
 }

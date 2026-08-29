@@ -1,0 +1,5 @@
+Transaction Date,Post Date,Description,Category,Type,Amount,Memo
+11/10/2025,11/10/2025,TEST PURCHASE,Shopping,Sale,-4800.00,
+01/10/2026,01/10/2026,TEST PURCHASE,Shopping,Sale,-4800.00,
+02/10/2026,02/10/2026,TEST PURCHASE,Shopping,Sale,-300.00,
+03/10/2026,03/10/2026,TEST REFUND,Shopping,Return,100.00,

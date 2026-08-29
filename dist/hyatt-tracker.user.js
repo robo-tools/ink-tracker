@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hyatt Card Elite Night Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.1.2
+// @version      1.1.3
 // @description  Tracks World of Hyatt personal and business card spend toward elite-night thresholds locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -1222,12 +1222,18 @@ function statementDateForAnchor(anchor) {
   return compactStatementDate(dateCell?.textContent ?? row?.textContent ?? anchor.textContent);
 }
 
+function statementAccountLabel(root, index) {
+  return root.querySelector(`#header-documentsAccordion-${index}`)?.textContent
+    || root.querySelector(`#button-documentsAccordion-${index}`)?.textContent
+    || '';
+}
+
 function extractStatementDocuments(root = document, wantedLast4 = '') {
   const documents = new Map();
   for (const anchor of root.querySelectorAll('a[data-documentid]')) {
     if (!/requestThisDocumentAnchor-(?:pdf|download)$/i.test(anchor.id ?? '')) continue;
     const match = anchor.id.match(/accountsTable-(\d+)-/);
-    const heading = match ? root.querySelector(`#header-documentsAccordion-${match[1]}`)?.textContent : '';
+    const heading = match ? statementAccountLabel(root, match[1]) : '';
     const last4 = normalizeLast4(heading);
     if (wantedLast4 && last4 !== wantedLast4) continue;
     const documentId = String(anchor.dataset.documentid ?? '').trim();
@@ -1250,10 +1256,15 @@ function statementAccountButton(root = document, wantedLast4 = '') {
 }
 
 function elementIsVisible(element) {
-  if (!element || element.hidden || element.classList?.contains('hide')) return false;
-  if (typeof getComputedStyle !== 'function') return true;
-  const style = getComputedStyle(element);
-  return style.display !== 'none' && style.visibility !== 'hidden';
+  if (!element) return false;
+  for (let current = element; current; current = current.parentElement) {
+    if (current.hidden || current.classList?.contains('hide')) return false;
+    if (typeof getComputedStyle === 'function') {
+      const style = getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+  }
+  return true;
 }
 
 async function expandStatementAccount(wantedLast4, year, signal) {
@@ -1266,12 +1277,13 @@ async function expandStatementAccount(wantedLast4, year, signal) {
   await waitFor(() => {
     assertNotCancelled(signal);
     button = statementAccountButton(document, wantedLast4);
-    if (!button || button.getAttribute('aria-expanded') !== 'true') return false;
+    if (!button) return false;
     const blockId = button.getAttribute('aria-controls');
     const block = blockId ? document.getElementById(blockId) : null;
     if (!block) return false;
     const documents = extractStatementDocuments(document, wantedLast4);
     if (documents.length) return documents.every((item) => item.statementDate.startsWith(String(year)));
+    if (button.getAttribute('aria-expanded') !== 'true') return false;
     return ![...block.querySelectorAll('[id^="spinner-payments-"]')].some(elementIsVisible);
   }, `Chase did not finish loading statements for card …${wantedLast4}.`, 30_000);
 }
@@ -2088,7 +2100,7 @@ function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.2</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.3</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;
