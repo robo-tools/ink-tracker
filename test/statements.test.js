@@ -45,6 +45,18 @@ test('statement parser reconciles purchases and resolves year rollover', () => {
   assert.equal(result.transactions[2].spendCents, 0);
 });
 
+test('statement parser accepts Chase amounts below one dollar without a leading zero', () => {
+  const pages = samplePages('$1,250.01').map((page) => page.flatMap((line) => (
+    line === '01/05 01/06 ATT BILL PAYMENT 50.00'
+      ? [line, '01/06 01/06 TINY PURCHASE .01']
+      : [line]
+  )));
+  const result = parseChaseStatementPages(pages, account);
+  assert.equal(result.parsedPurchaseCents, 125_001);
+  const tinyPurchase = result.transactions.find((item) => item.description === 'TINY PURCHASE');
+  assert.equal(tinyPurchase?.spendCents, 1);
+});
+
 test('statement parser rejects the entire statement when Chase totals do not reconcile', () => {
   assert.throws(() => parseChaseStatementPages(samplePages('$1,249.99'), account), /reconciliation failed/);
 });

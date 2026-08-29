@@ -2,7 +2,7 @@ import { formatDateOnly } from './dates.js';
 import { normalizeLast4, normalizeTransaction, parseMoneyCents } from './normalize.js';
 
 const PARSER_VERSION = 1;
-const MONEY_AT_END = '(-?\\$?\\s*[\\d,]+\\.\\d{2})';
+const MONEY_AT_END = '(-?\\$?\\s*(?:[\\d,]+\\.\\d{2}|\\.\\d{2}))';
 const ROW_PATTERN = new RegExp(`^(\\d{2}/\\d{2})(?!/\\d)\\s+(?:(\\d{2}/\\d{2})(?!/\\d)\\s+)?(.+?)\\s+${MONEY_AT_END}$`);
 
 function cleanLine(value) {
