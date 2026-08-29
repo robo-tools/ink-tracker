@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hyatt Card Elite Night Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.1.7
+// @version      1.1.8
 // @description  Tracks World of Hyatt personal and business card spend toward elite-night thresholds locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -940,6 +940,8 @@ async function syncAllCards(onProgress = () => {}, options = {}) {
 // ---- packages/chase-core/app/capture.js ----
 const INTERESTING_URL = /(account|activity|transaction|reward|earn|spend|card)/i;
 const REQUEST_CONTEXT_MARKER = '__chaseTrackerRequestContextV1';
+const ORIGINAL_FETCH_MARKER = '__chaseTrackerOriginalFetchV1';
+const DOCUMENT_AUTHORIZATION_PATH = '/svc/rr/documents/secure/idal/v2/dockey/list';
 
 function headerValue(headers, wantedName) {
   if (!headers) return '';
@@ -966,50 +968,141 @@ function headerValue(headers, wantedName) {
   return '';
 }
 
-function extractChaseRequestContext(input, init = {}, capturedAt = Date.now()) {
-  const sources = [input?.headers, init?.headers];
-  const readLatest = (name) => {
-    let value = '';
-    for (const headers of sources) value = headerValue(headers, name) || value;
-    return value;
-  };
-  const csrfToken = readLatest('X-Jpmc-Csrf-Token');
-  const channel = readLatest('X-Jpmc-Channel');
-  const clientRequestId = readLatest('X-Jpmc-Client-Request-Id');
-  if (!csrfToken && !channel && !clientRequestId) return null;
-  return { csrfToken, channel, clientRequestId, capturedAt };
+function pageTarget(page = null) {
+  return page ?? (typeof unsafeWindow !== 'undefined'
+    ? unsafeWindow
+    : (typeof window !== 'undefined' ? window : null));
 }
 
-function rememberChaseRequestContext(page, input, init) {
-  const captured = extractChaseRequestContext(input, init);
-  if (!captured) return;
-  const previous = page[REQUEST_CONTEXT_MARKER] ?? {};
-  page[REQUEST_CONTEXT_MARKER] = {
-    csrfToken: captured.csrfToken || previous.csrfToken || '',
-    channel: captured.channel || previous.channel || '',
-    clientRequestId: captured.clientRequestId || previous.clientRequestId || '',
-    capturedAt: captured.csrfToken ? captured.capturedAt : previous.capturedAt || captured.capturedAt
+function defineHidden(target, key, value, writable = true) {
+  if (!target) return;
+  try {
+    Object.defineProperty(target, key, {
+      value,
+      configurable: false,
+      enumerable: false,
+      writable
+    });
+  } catch {
+    try {
+      target[key] = value;
+    } catch {
+      // A locked-down page realm may reject marker properties.
+    }
+  }
+}
+
+function isChaseDocumentRequestUrl(value, method = 'POST') {
+  const raw = value?.url ?? value;
+  if (!raw) return false;
+  try {
+    const url = new URL(String(raw), typeof location !== 'undefined' ? location.href : 'https://secure.chase.com/');
+    return url.protocol === 'https:'
+      && /^secure(?:[0-9a-z-]+)?\.chase\.com$/i.test(url.hostname)
+      && url.pathname.toLowerCase() === DOCUMENT_AUTHORIZATION_PATH
+      && String(method || 'GET').toUpperCase() === 'POST';
+  } catch {
+    return false;
+  }
+}
+
+function requestBodyValue(body, wantedName) {
+  if (body == null) return '';
+  try {
+    if (typeof body.get === 'function') return String(body.get(wantedName) ?? '').trim();
+  } catch {
+    // Fall through to serialized form bodies.
+  }
+  if (typeof body !== 'string') return '';
+  try {
+    return String(new URLSearchParams(body).get(wantedName) ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function fetchRequestBody(input, init = {}) {
+  if (init && Object.prototype.hasOwnProperty.call(init, 'body') && init.body !== undefined) {
+    return Promise.resolve(init.body);
+  }
+  try {
+    const clone = input?.clone?.();
+    if (clone && typeof clone.text === 'function') return Promise.resolve(clone.text()).catch(() => undefined);
+  } catch {
+    // Request bodies are optional; header capture still works without one.
+  }
+  return Promise.resolve(undefined);
+}
+
+function extractChaseRequestContext(input, init = {}, capturedAt = Date.now(), body = undefined) {
+  const hasInitHeaders = init && Object.prototype.hasOwnProperty.call(init, 'headers')
+    && init.headers !== undefined;
+  const headers = hasInitHeaders ? init.headers : input?.headers;
+  const csrfToken = headerValue(headers, 'X-Jpmc-Csrf-Token');
+  const channel = headerValue(headers, 'X-Jpmc-Channel');
+  const clientRequestId = headerValue(headers, 'X-Jpmc-Client-Request-Id');
+  if (!csrfToken && !channel && !clientRequestId) return null;
+  return {
+    csrfToken,
+    channel,
+    clientRequestId,
+    requestedWith: headerValue(headers, 'X-Requested-With'),
+    dateFilterType: requestBodyValue(
+      body !== undefined ? body : init?.body,
+      'dateFilter.idalDateFilterType'
+    ),
+    capturedAt
   };
+}
+
+function rememberChaseRequestContext(page, captured, requestUrl, method) {
+  if (!isChaseDocumentRequestUrl(requestUrl, method)) return;
+  if (!captured?.csrfToken || !captured.channel || !captured.clientRequestId) return;
+  let requestOrigin = '';
+  try {
+    requestOrigin = new URL(String(requestUrl), typeof location !== 'undefined' ? location.href : 'https://secure.chase.com/').origin;
+  } catch {
+    // The URL was already validated; this is only defensive.
+  }
+  const context = { ...captured, requestOrigin };
+  if (Object.prototype.hasOwnProperty.call(page, REQUEST_CONTEXT_MARKER)) {
+    try {
+      page[REQUEST_CONTEXT_MARKER] = context;
+      return;
+    } catch {
+      // Fall through and try defining a hidden marker.
+    }
+  }
+  defineHidden(page, REQUEST_CONTEXT_MARKER, context);
 }
 
 function chaseRequestContext(page = null) {
-  const target = page ?? (typeof unsafeWindow !== 'undefined'
-    ? unsafeWindow
-    : (typeof window !== 'undefined' ? window : null));
+  const target = pageTarget(page);
   const context = target?.[REQUEST_CONTEXT_MARKER];
   if (!context || typeof context !== 'object') return null;
   return {
     csrfToken: String(context.csrfToken ?? ''),
     channel: String(context.channel ?? ''),
     clientRequestId: String(context.clientRequestId ?? ''),
+    requestedWith: String(context.requestedWith ?? ''),
+    dateFilterType: String(context.dateFilterType ?? ''),
+    requestOrigin: String(context.requestOrigin ?? ''),
     capturedAt: Number(context.capturedAt ?? 0)
   };
 }
 
+function chasePageFetch(page = null) {
+  const target = pageTarget(page);
+  const rawFetch = target?.[ORIGINAL_FETCH_MARKER] ?? target?.fetch;
+  return typeof rawFetch === 'function' ? rawFetch.bind(target) : null;
+}
+
 function installChaseNetworkCapture(onNormalizedData, options = {}) {
-  const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  const page = pageTarget(options.page);
+  if (!page) return { installed: false, error: 'Page context is unavailable.' };
   const marker = options.marker || '__chaseTrackerCaptureV1';
   const requestUrlKey = `${marker}Url`;
+  const requestMethodKey = `${marker}Method`;
   const requestHeadersKey = `${marker}Headers`;
   const label = options.label || 'Chase Tracker';
   const normalizePayload = options.normalizePayload
@@ -1032,9 +1125,17 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
   try {
     if (typeof page.fetch === 'function') {
       const originalFetch = page.fetch;
+      if (!Object.prototype.hasOwnProperty.call(page, ORIGINAL_FETCH_MARKER)) {
+        defineHidden(page, ORIGINAL_FETCH_MARKER, originalFetch, false);
+      }
       page.fetch = async function chaseTrackerFetch(...args) {
-        rememberChaseRequestContext(page, args[0], args[1]);
+        const requestUrl = args[0]?.url ?? args[0];
+        const requestMethod = String(args[1]?.method ?? args[0]?.method ?? 'GET').toUpperCase();
+        const capturedAt = Date.now();
+        const requestBody = fetchRequestBody(args[0], args[1]);
         const response = await originalFetch.apply(this, args);
+        const captured = extractChaseRequestContext(args[0], args[1], capturedAt, await requestBody);
+        if (response?.ok) rememberChaseRequestContext(page, captured, requestUrl ?? response.url, requestMethod);
         const url = args[0]?.url ?? args[0] ?? response.url;
         void inspect(response, url);
         return response;
@@ -1048,6 +1149,7 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
       const originalSetRequestHeader = xhrPrototype.setRequestHeader;
       xhrPrototype.open = function chaseTrackerOpen(method, url, ...rest) {
         this[requestUrlKey] = String(url);
+        this[requestMethodKey] = String(method ?? 'GET').toUpperCase();
         this[requestHeadersKey] = {};
         return originalOpen.call(this, method, url, ...rest);
       };
@@ -1057,10 +1159,22 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
         return originalSetRequestHeader.call(this, name, value);
       };
       xhrPrototype.send = function chaseTrackerSend(...args) {
-        rememberChaseRequestContext(page, null, { headers: this[requestHeadersKey] });
+        const captured = extractChaseRequestContext(
+          null,
+          { headers: this[requestHeadersKey] },
+          Date.now(),
+          args[0]
+        );
         this.addEventListener('load', () => {
           try {
-            if (!INTERESTING_URL.test(this[requestUrlKey]) || this.status < 200 || this.status >= 300) return;
+            if (this.status < 200 || this.status >= 300) return;
+            rememberChaseRequestContext(
+              page,
+              captured,
+              this[requestUrlKey],
+              this[requestMethodKey]
+            );
+            if (!INTERESTING_URL.test(this[requestUrlKey])) return;
             const payload = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
             const normalized = normalizePayload(payload, this[requestUrlKey]);
             if (normalized.accounts.length || normalized.transactions.length) onNormalizedData(normalized);
@@ -1071,7 +1185,7 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
         return originalSend.apply(this, args);
       };
     }
-    page[marker] = true;
+    defineHidden(page, marker, true);
     return { installed: true, reused: false };
   } catch (error) {
     console.warn(`[${label}] Network capture was unavailable; DOM sync and CSV import still work.`, error);
@@ -1552,44 +1666,107 @@ function statementHttpError(status) {
   return error;
 }
 
+function statementStageHttpError(status, stage) {
+  const error = statementHttpError(status);
+  error.stage = stage;
+  error.authorization = stage === 'authorization';
+  error.fatal = status === 401 || status === 403;
+  error.message = stage === 'authorization'
+    ? `Chase returned HTTP ${status} while authorizing this statement.`
+    : `Chase returned HTTP ${status} while downloading the authorized statement PDF.`;
+  return error;
+}
+
+function statementStageError(message, stage, status = 0) {
+  const error = status ? statementHttpError(status) : new Error(message);
+  error.message = message;
+  error.stage = stage;
+  error.authorization = stage === 'authorization';
+  error.fatal = true;
+  return error;
+}
+
 function validateStatementPdfBytes(value) {
   const bytes = value instanceof Uint8Array ? value : new Uint8Array(value ?? 0);
   const signature = String.fromCharCode(...bytes.slice(0, 4));
   if (signature !== '%PDF') {
-    const error = new Error('Chase did not return a PDF. The session may have expired.');
-    error.retryable = true;
-    throw error;
+    throw statementStageError(
+      'Chase returned a page instead of the authorized statement PDF. The session may have expired.',
+      'pdf'
+    );
   }
   return bytes;
 }
 
 function pageFetch() {
-  if (typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function') {
-    return unsafeWindow.fetch.bind(unsafeWindow);
-  }
-  return fetch.bind(globalThis);
+  return chasePageFetch() ?? (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
 }
 
 function statementAuthorizationError(message, status = 401) {
   const error = statementHttpError(status);
   error.message = message;
   error.authorization = true;
+  error.stage = 'authorization';
+  error.fatal = true;
   return error;
 }
 
-function nextClientRequestId(previous = '') {
-  const generated = globalThis.crypto?.randomUUID?.() ?? '';
+function nextClientRequestId(previous = '', generatedId = '') {
+  const generated = generatedId || globalThis.crypto?.randomUUID?.() || '';
   if (!generated) return previous;
-  const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
-  return uuidPattern.test(previous) ? previous.replace(uuidPattern, generated) : generated;
+  const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  if (uuidPattern.test(previous)) return previous.replace(uuidPattern, generated);
+  const compactPattern = /[0-9a-f]{32}/i;
+  if (compactPattern.test(previous)) return previous.replace(compactPattern, generated.replaceAll('-', ''));
+  return generated;
 }
 
-function statementAccessBody(item) {
+function statementAccessBody(item, dateFilterType = '') {
   const body = new URLSearchParams();
   body.set('accountFilter', item.accountDocumentId);
-  body.set('dateFilter.idalDateFilterType', 'CURRENT_YEAR');
+  if (dateFilterType) body.set('dateFilter.idalDateFilterType', dateFilterType);
   body.set('documentId', item.documentId);
   return body;
+}
+
+function setRequestHeader(headers, name, value) {
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === name.toLowerCase()) delete headers[key];
+  }
+  if (String(value ?? '').trim()) headers[name] = String(value).trim();
+}
+
+function statementAccessRequest(item, auth, context = {}) {
+  const requestId = nextClientRequestId(auth?.clientRequestId, context.generatedClientRequestId);
+  const headers = {};
+  setRequestHeader(headers, 'Accept', '*/*');
+  setRequestHeader(headers, 'Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+  setRequestHeader(headers, 'X-Requested-With', auth?.requestedWith);
+  setRequestHeader(headers, 'X-Jpmc-Channel', auth?.channel);
+  setRequestHeader(headers, 'X-Jpmc-Client-Request-Id', requestId);
+  setRequestHeader(headers, 'X-Jpmc-Csrf-Token', auth?.csrfToken);
+  const requestOrigin = secureChaseOrigin(auth?.requestOrigin) || 'https://secure.chase.com';
+  return {
+    url: new URL(DOCUMENT_ACCESS_PATH, requestOrigin).href,
+    options: {
+      method: 'POST',
+      credentials: 'include',
+      signal: context.signal,
+      headers,
+      body: statementAccessBody(item, auth?.dateFilterType).toString()
+    }
+  };
+}
+
+function statementPdfRequest(url, signal) {
+  return {
+    url: url.href ?? String(url),
+    options: {
+      credentials: 'include',
+      signal,
+      headers: { Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8' }
+    }
+  };
 }
 
 function statementPdfUrlFromAccess(payload, context = {}) {
@@ -1610,7 +1787,7 @@ function statementPdfUrlFromAccess(payload, context = {}) {
   if (!url.searchParams.get('docKey')) url.searchParams.set('docKey', docKey);
   if (!url.searchParams.get('download')) url.searchParams.set('download', 'false');
   if (!url.searchParams.get('adaVersion')) url.searchParams.set('adaVersion', 'false');
-  const csrfToken = String(payload?.csrfToken ?? payload?.csrftoken ?? context.csrfToken ?? '').trim();
+  const csrfToken = String(payload?.csrfToken ?? payload?.csrftoken ?? '').trim();
   if (csrfToken && ![...url.searchParams.keys()].some((key) => key.toLowerCase() === 'csrftoken')) {
     url.searchParams.set('csrfToken', csrfToken);
   }
@@ -1619,8 +1796,8 @@ function statementPdfUrlFromAccess(payload, context = {}) {
   return url;
 }
 
-async function authorizeStatementDocument(item, signal) {
-  const auth = chaseRequestContext();
+async function authorizeStatementDocument(item, signal, context = {}) {
+  const auth = context.auth ?? chaseRequestContext();
   if (!auth?.csrfToken) {
     throw statementAuthorizationError(
       'Chase’s current document authorization token was not available. Reload Chase, then retry the statement scan.'
@@ -1629,44 +1806,49 @@ async function authorizeStatementDocument(item, signal) {
   if (!item.accountDocumentId) {
     throw new Error('Chase did not expose the selected card’s statement account identifier.');
   }
-  const requestId = nextClientRequestId(auth.clientRequestId);
-  if (!requestId) {
+  if (!auth.clientRequestId) {
     throw statementAuthorizationError(
       'Chase’s current document request context was incomplete. Reload Chase, then retry the statement scan.'
     );
   }
-  const response = await pageFetch()(new URL(DOCUMENT_ACCESS_PATH, 'https://secure.chase.com').href, {
-    method: 'POST',
-    credentials: 'include',
-    signal,
-    headers: {
-      Accept: '*/*',
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'X-Jpmc-Channel': auth.channel || 'WEB',
-      'X-Jpmc-Client-Request-Id': requestId,
-      'X-Jpmc-Csrf-Token': auth.csrfToken
-    },
-    body: statementAccessBody(item).toString()
-  });
-  if (!response.ok) throw statementHttpError(response.status);
+  if (!auth.channel || !auth.dateFilterType) {
+    throw statementAuthorizationError(
+      'Chase’s document request template was incomplete. Open one statement from an older year normally, close its PDF viewer, then retry the statement scan.'
+    );
+  }
+  const statementYear = Number(String(item.statementDate ?? '').slice(0, 4));
+  const currentYear = Number(context.currentYear ?? new Date().getFullYear());
+  if (auth.dateFilterType === 'CURRENT_YEAR' && statementYear && statementYear !== currentYear) {
+    throw statementAuthorizationError(
+      'Chase only provided a current-year document template. Open one statement from an older year normally, close its PDF viewer, then retry the statement scan.'
+    );
+  }
+  const request = statementAccessRequest(item, auth, { signal });
+  const fetchPage = context.fetchPage ?? pageFetch();
+  if (!fetchPage) throw statementAuthorizationError('Chase’s page request function was unavailable. Reload Chase, then retry.');
+  const response = await fetchPage(request.url, request.options);
+  if (!response.ok) throw statementStageHttpError(response.status, 'authorization');
   let payload;
   try {
     payload = await response.json();
   } catch {
-    throw new Error('Chase did not return a valid statement authorization response.');
+    throw statementStageError('Chase did not return a valid statement authorization response.', 'authorization');
   }
-  const fromOrigin = statementRequestOriginCandidates()[0] || 'https://secure.chase.com';
-  return statementPdfUrlFromAccess(payload, { csrfToken: auth.csrfToken, fromOrigin });
+  const fromOrigin = (context.originCandidates ?? statementRequestOriginCandidates)()[0] || 'https://secure.chase.com';
+  try {
+    return statementPdfUrlFromAccess(payload, { fromOrigin });
+  } catch (error) {
+    throw statementStageError(error?.message || 'Chase could not authorize this statement.', 'authorization');
+  }
 }
 
-async function fetchAuthorizedStatementPdf(item, signal) {
-  const url = await authorizeStatementDocument(item, signal);
-  const response = await pageFetch()(url.href, {
-    credentials: 'include',
-    signal,
-    headers: { Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8' }
-  });
-  if (!response.ok) throw statementHttpError(response.status);
+async function fetchAuthorizedStatementPdf(item, signal, context = {}) {
+  const url = await authorizeStatementDocument(item, signal, context);
+  const request = statementPdfRequest(url, signal);
+  const fetchPage = context.fetchPage ?? pageFetch();
+  if (!fetchPage) throw statementStageError('Chase’s page request function was unavailable.', 'pdf');
+  const response = await fetchPage(request.url, request.options);
+  if (!response.ok) throw statementStageHttpError(response.status, 'pdf');
   return validateStatementPdfBytes(await response.arrayBuffer());
 }
 
@@ -1802,10 +1984,11 @@ async function collectChaseStatementBackfill(options) {
         imported.add(result.statementDate);
         await onResult(result, { completed: index + 1, total: wanted.length });
       } catch (error) {
-        if ([401, 403].includes(error?.status)) {
-          throw new Error(
-            `${error?.message || `Chase rejected the statement request (HTTP ${error.status}).`} The scan stopped after the first authorization failure instead of requesting the remaining PDFs. Reload Chase, sign in again if prompted, and retry.`
-          );
+        if ([401, 403].includes(error?.status) || error?.fatal) {
+          const guidance = error.stage === 'pdf'
+            ? 'Chase authorized the statement but blocked the background PDF download. Retry once after reloading Chase; if it repeats, use “Import downloaded PDFs” for those statements.'
+            : 'The scan stopped after the first document-authorization failure instead of requesting the remaining PDFs. Open one statement from an older year normally, close its PDF viewer, and retry; sign in again if Chase prompts you.';
+          throw new Error(`${error?.message || `Chase rejected the statement request (HTTP ${error.status}).`} ${guidance}`);
         }
         const failure = { statementDate: displayDate, message: error?.message || String(error) };
         failures.push(failure);
@@ -2335,7 +2518,7 @@ function personalSetup(metric, options = {}) {
         <div class="method-note"><strong>Full history</strong><span>We calculate lifetime qualifying spend modulo $5,000.</span></div>
         <div class="statement-backfill ${statementHistoryComplete ? 'complete' : ''}">
           <div><strong>${statementHistoryComplete ? '✓ Full history verified from Chase statements' : 'Older history from monthly statements'}</strong>
-          <p>Run this after the normal Refresh. The optional one-time scan opens Chase Statements &amp; Documents, selects every needed year, expands this card, and reads the monthly PDFs Chase still provides (normally up to seven years). It fetches each PDF directly in your signed-in Chase session, so it will not open PDF viewer windows.</p>
+          <p>Run this after the normal Refresh. Before the first scan, open any statement from an older year once and close its PDF viewer; this lets Chase establish its secure document-request template. The optional scan then selects every needed year, expands this card, and reads the monthly PDFs Chase still provides (normally up to seven years) without opening more PDF viewer windows.</p>
           <div class="statement-coverage">${statementCoverageSummary(metric)}</div></div>
           <div class="statement-actions">${options.statementBusy
             ? '<button type="button" data-action="cancel-statements">Cancel scan</button>'
@@ -2437,7 +2620,7 @@ function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.7</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.8</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;
@@ -2524,7 +2707,7 @@ function createHyattTrackerUi(handlers) {
       const form = root.querySelector('[data-setup-form]');
       const benefitStartDate = form?.elements?.benefitStartDate?.value;
       if (!benefitStartDate) { showStatus('Enter when the current Hyatt benefits began first.', true); return; }
-      if (!confirm('Scan Chase monthly statements for this card? The current tab will briefly visit Statements & Documents and fetch each needed PDF directly. No PDF viewer windows will open, and raw PDFs will not be saved.')) return;
+      if (!confirm('Scan Chase monthly statements for this card? Before the first scan, open any older statement normally and close its PDF viewer. The current tab will then briefly visit Statements & Documents and fetch each needed PDF directly. The scan will not open more PDF viewer windows, and raw PDFs will not be saved.')) return;
       statementBackfillController = new AbortController();
       render();
       await run(

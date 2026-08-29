@@ -1,6 +1,6 @@
 import { parseChaseStatementPages, pdfTextItemsToLines } from '../lib/statements.js';
 import { normalizeLast4 } from '../lib/normalize.js';
-import { chaseRequestContext } from './capture.js';
+import { chasePageFetch, chaseRequestContext } from './capture.js';
 
 const PDF_RESOURCE = 'CHASE_TRACKER_PDFJS';
 const PDF_WORKER_RESOURCE = 'CHASE_TRACKER_PDFJS_WORKER';
@@ -332,44 +332,107 @@ function statementHttpError(status) {
   return error;
 }
 
+function statementStageHttpError(status, stage) {
+  const error = statementHttpError(status);
+  error.stage = stage;
+  error.authorization = stage === 'authorization';
+  error.fatal = status === 401 || status === 403;
+  error.message = stage === 'authorization'
+    ? `Chase returned HTTP ${status} while authorizing this statement.`
+    : `Chase returned HTTP ${status} while downloading the authorized statement PDF.`;
+  return error;
+}
+
+function statementStageError(message, stage, status = 0) {
+  const error = status ? statementHttpError(status) : new Error(message);
+  error.message = message;
+  error.stage = stage;
+  error.authorization = stage === 'authorization';
+  error.fatal = true;
+  return error;
+}
+
 function validateStatementPdfBytes(value) {
   const bytes = value instanceof Uint8Array ? value : new Uint8Array(value ?? 0);
   const signature = String.fromCharCode(...bytes.slice(0, 4));
   if (signature !== '%PDF') {
-    const error = new Error('Chase did not return a PDF. The session may have expired.');
-    error.retryable = true;
-    throw error;
+    throw statementStageError(
+      'Chase returned a page instead of the authorized statement PDF. The session may have expired.',
+      'pdf'
+    );
   }
   return bytes;
 }
 
 function pageFetch() {
-  if (typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function') {
-    return unsafeWindow.fetch.bind(unsafeWindow);
-  }
-  return fetch.bind(globalThis);
+  return chasePageFetch() ?? (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
 }
 
 function statementAuthorizationError(message, status = 401) {
   const error = statementHttpError(status);
   error.message = message;
   error.authorization = true;
+  error.stage = 'authorization';
+  error.fatal = true;
   return error;
 }
 
-function nextClientRequestId(previous = '') {
-  const generated = globalThis.crypto?.randomUUID?.() ?? '';
+export function nextClientRequestId(previous = '', generatedId = '') {
+  const generated = generatedId || globalThis.crypto?.randomUUID?.() || '';
   if (!generated) return previous;
-  const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
-  return uuidPattern.test(previous) ? previous.replace(uuidPattern, generated) : generated;
+  const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  if (uuidPattern.test(previous)) return previous.replace(uuidPattern, generated);
+  const compactPattern = /[0-9a-f]{32}/i;
+  if (compactPattern.test(previous)) return previous.replace(compactPattern, generated.replaceAll('-', ''));
+  return generated;
 }
 
-function statementAccessBody(item) {
+export function statementAccessBody(item, dateFilterType = '') {
   const body = new URLSearchParams();
   body.set('accountFilter', item.accountDocumentId);
-  body.set('dateFilter.idalDateFilterType', 'CURRENT_YEAR');
+  if (dateFilterType) body.set('dateFilter.idalDateFilterType', dateFilterType);
   body.set('documentId', item.documentId);
   return body;
+}
+
+function setRequestHeader(headers, name, value) {
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === name.toLowerCase()) delete headers[key];
+  }
+  if (String(value ?? '').trim()) headers[name] = String(value).trim();
+}
+
+export function statementAccessRequest(item, auth, context = {}) {
+  const requestId = nextClientRequestId(auth?.clientRequestId, context.generatedClientRequestId);
+  const headers = {};
+  setRequestHeader(headers, 'Accept', '*/*');
+  setRequestHeader(headers, 'Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+  setRequestHeader(headers, 'X-Requested-With', auth?.requestedWith);
+  setRequestHeader(headers, 'X-Jpmc-Channel', auth?.channel);
+  setRequestHeader(headers, 'X-Jpmc-Client-Request-Id', requestId);
+  setRequestHeader(headers, 'X-Jpmc-Csrf-Token', auth?.csrfToken);
+  const requestOrigin = secureChaseOrigin(auth?.requestOrigin) || 'https://secure.chase.com';
+  return {
+    url: new URL(DOCUMENT_ACCESS_PATH, requestOrigin).href,
+    options: {
+      method: 'POST',
+      credentials: 'include',
+      signal: context.signal,
+      headers,
+      body: statementAccessBody(item, auth?.dateFilterType).toString()
+    }
+  };
+}
+
+export function statementPdfRequest(url, signal) {
+  return {
+    url: url.href ?? String(url),
+    options: {
+      credentials: 'include',
+      signal,
+      headers: { Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8' }
+    }
+  };
 }
 
 export function statementPdfUrlFromAccess(payload, context = {}) {
@@ -390,7 +453,7 @@ export function statementPdfUrlFromAccess(payload, context = {}) {
   if (!url.searchParams.get('docKey')) url.searchParams.set('docKey', docKey);
   if (!url.searchParams.get('download')) url.searchParams.set('download', 'false');
   if (!url.searchParams.get('adaVersion')) url.searchParams.set('adaVersion', 'false');
-  const csrfToken = String(payload?.csrfToken ?? payload?.csrftoken ?? context.csrfToken ?? '').trim();
+  const csrfToken = String(payload?.csrfToken ?? payload?.csrftoken ?? '').trim();
   if (csrfToken && ![...url.searchParams.keys()].some((key) => key.toLowerCase() === 'csrftoken')) {
     url.searchParams.set('csrfToken', csrfToken);
   }
@@ -399,8 +462,8 @@ export function statementPdfUrlFromAccess(payload, context = {}) {
   return url;
 }
 
-async function authorizeStatementDocument(item, signal) {
-  const auth = chaseRequestContext();
+export async function authorizeStatementDocument(item, signal, context = {}) {
+  const auth = context.auth ?? chaseRequestContext();
   if (!auth?.csrfToken) {
     throw statementAuthorizationError(
       'Chase’s current document authorization token was not available. Reload Chase, then retry the statement scan.'
@@ -409,44 +472,49 @@ async function authorizeStatementDocument(item, signal) {
   if (!item.accountDocumentId) {
     throw new Error('Chase did not expose the selected card’s statement account identifier.');
   }
-  const requestId = nextClientRequestId(auth.clientRequestId);
-  if (!requestId) {
+  if (!auth.clientRequestId) {
     throw statementAuthorizationError(
       'Chase’s current document request context was incomplete. Reload Chase, then retry the statement scan.'
     );
   }
-  const response = await pageFetch()(new URL(DOCUMENT_ACCESS_PATH, 'https://secure.chase.com').href, {
-    method: 'POST',
-    credentials: 'include',
-    signal,
-    headers: {
-      Accept: '*/*',
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'X-Jpmc-Channel': auth.channel || 'WEB',
-      'X-Jpmc-Client-Request-Id': requestId,
-      'X-Jpmc-Csrf-Token': auth.csrfToken
-    },
-    body: statementAccessBody(item).toString()
-  });
-  if (!response.ok) throw statementHttpError(response.status);
+  if (!auth.channel || !auth.dateFilterType) {
+    throw statementAuthorizationError(
+      'Chase’s document request template was incomplete. Open one statement from an older year normally, close its PDF viewer, then retry the statement scan.'
+    );
+  }
+  const statementYear = Number(String(item.statementDate ?? '').slice(0, 4));
+  const currentYear = Number(context.currentYear ?? new Date().getFullYear());
+  if (auth.dateFilterType === 'CURRENT_YEAR' && statementYear && statementYear !== currentYear) {
+    throw statementAuthorizationError(
+      'Chase only provided a current-year document template. Open one statement from an older year normally, close its PDF viewer, then retry the statement scan.'
+    );
+  }
+  const request = statementAccessRequest(item, auth, { signal });
+  const fetchPage = context.fetchPage ?? pageFetch();
+  if (!fetchPage) throw statementAuthorizationError('Chase’s page request function was unavailable. Reload Chase, then retry.');
+  const response = await fetchPage(request.url, request.options);
+  if (!response.ok) throw statementStageHttpError(response.status, 'authorization');
   let payload;
   try {
     payload = await response.json();
   } catch {
-    throw new Error('Chase did not return a valid statement authorization response.');
+    throw statementStageError('Chase did not return a valid statement authorization response.', 'authorization');
   }
-  const fromOrigin = statementRequestOriginCandidates()[0] || 'https://secure.chase.com';
-  return statementPdfUrlFromAccess(payload, { csrfToken: auth.csrfToken, fromOrigin });
+  const fromOrigin = (context.originCandidates ?? statementRequestOriginCandidates)()[0] || 'https://secure.chase.com';
+  try {
+    return statementPdfUrlFromAccess(payload, { fromOrigin });
+  } catch (error) {
+    throw statementStageError(error?.message || 'Chase could not authorize this statement.', 'authorization');
+  }
 }
 
-async function fetchAuthorizedStatementPdf(item, signal) {
-  const url = await authorizeStatementDocument(item, signal);
-  const response = await pageFetch()(url.href, {
-    credentials: 'include',
-    signal,
-    headers: { Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8' }
-  });
-  if (!response.ok) throw statementHttpError(response.status);
+export async function fetchAuthorizedStatementPdf(item, signal, context = {}) {
+  const url = await authorizeStatementDocument(item, signal, context);
+  const request = statementPdfRequest(url, signal);
+  const fetchPage = context.fetchPage ?? pageFetch();
+  if (!fetchPage) throw statementStageError('Chase’s page request function was unavailable.', 'pdf');
+  const response = await fetchPage(request.url, request.options);
+  if (!response.ok) throw statementStageHttpError(response.status, 'pdf');
   return validateStatementPdfBytes(await response.arrayBuffer());
 }
 
@@ -582,10 +650,11 @@ export async function collectChaseStatementBackfill(options) {
         imported.add(result.statementDate);
         await onResult(result, { completed: index + 1, total: wanted.length });
       } catch (error) {
-        if ([401, 403].includes(error?.status)) {
-          throw new Error(
-            `${error?.message || `Chase rejected the statement request (HTTP ${error.status}).`} The scan stopped after the first authorization failure instead of requesting the remaining PDFs. Reload Chase, sign in again if prompted, and retry.`
-          );
+        if ([401, 403].includes(error?.status) || error?.fatal) {
+          const guidance = error.stage === 'pdf'
+            ? 'Chase authorized the statement but blocked the background PDF download. Retry once after reloading Chase; if it repeats, use “Import downloaded PDFs” for those statements.'
+            : 'The scan stopped after the first document-authorization failure instead of requesting the remaining PDFs. Open one statement from an older year normally, close its PDF viewer, and retry; sign in again if Chase prompts you.';
+          throw new Error(`${error?.message || `Chase rejected the statement request (HTTP ${error.status}).`} ${guidance}`);
         }
         const failure = { statementDate: displayDate, message: error?.message || String(error) };
         failures.push(failure);
