@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseChaseStatementPages, pdfTextItemsToLines } from '../packages/chase-core/lib/statements.js';
 import {
+  chaseStatementErrorMessage,
   extractStatementDocuments,
   elementIsVisible,
   mergeStatementCoverage,
@@ -139,6 +140,17 @@ test('statement discovery ignores a loader mounted inside a hidden Chase contain
     parentElement: hiddenParent
   };
   assert.equal(elementIsVisible(spinner), false);
+});
+
+test('statement discovery surfaces a visible Chase service error instead of treating it as no documents', () => {
+  const dialog = {
+    textContent: "It looks like our site isn't working right now. Please try again.",
+    hidden: false,
+    classList: { contains: () => false },
+    parentElement: null
+  };
+  const root = { querySelectorAll: () => [dialog] };
+  assert.match(chaseStatementErrorMessage(root), /site isn't working/i);
 });
 
 test('statement coverage only becomes complete with continuous start-to-recent periods', () => {

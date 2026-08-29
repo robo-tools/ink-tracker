@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hyatt Card Elite Night Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.1.3
+// @version      1.1.4
 // @description  Tracks World of Hyatt personal and business card spend toward elite-night thresholds locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -1267,8 +1267,40 @@ function elementIsVisible(element) {
   return true;
 }
 
+function chaseStatementErrorMessage(root = document) {
+  const pattern = /site isn['’]t working|having trouble|unable to (?:complete|load)|please try again/i;
+  const candidates = root.querySelectorAll([
+    '#serviceErrorModal',
+    '#globalErrorContainer',
+    '[role="dialog"]'
+  ].join(','));
+  for (const element of candidates) {
+    const text = String(element.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (text && pattern.test(text) && elementIsVisible(element)) return text;
+  }
+  return '';
+}
+
+function assertNoChaseStatementError() {
+  const message = chaseStatementErrorMessage(document);
+  if (message) {
+    throw new Error('Chase reported that Statements & Documents is temporarily unavailable. Close Chase’s error message, refresh the page, and retry the statement scan.');
+  }
+}
+
+function statementUiIsLoading(root = document) {
+  return [...root.querySelectorAll('#content-spinner-overlay,[id^="spinner-payments-"]')]
+    .some(elementIsVisible);
+}
+
+function statementPanelIsEmpty(block) {
+  const text = String(block?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  return /(?:no|don['’]t have any) (?:statements|documents)|nothing to (?:display|show)/i.test(text);
+}
+
 async function expandStatementAccount(wantedLast4, year, signal) {
   assertNotCancelled(signal);
+  assertNoChaseStatementError();
   let button = await waitFor(
     () => statementAccountButton(document, wantedLast4),
     `Chase did not list the card ending …${wantedLast4} on Statements & Documents.`
@@ -1276,6 +1308,7 @@ async function expandStatementAccount(wantedLast4, year, signal) {
   if (button.getAttribute('aria-expanded') !== 'true') button.click();
   await waitFor(() => {
     assertNotCancelled(signal);
+    assertNoChaseStatementError();
     button = statementAccountButton(document, wantedLast4);
     if (!button) return false;
     const blockId = button.getAttribute('aria-controls');
@@ -1284,12 +1317,13 @@ async function expandStatementAccount(wantedLast4, year, signal) {
     const documents = extractStatementDocuments(document, wantedLast4);
     if (documents.length) return documents.every((item) => item.statementDate.startsWith(String(year)));
     if (button.getAttribute('aria-expanded') !== 'true') return false;
-    return ![...block.querySelectorAll('[id^="spinner-payments-"]')].some(elementIsVisible);
+    return !statementUiIsLoading(block) && statementPanelIsEmpty(block);
   }, `Chase did not finish loading statements for card …${wantedLast4}.`, 30_000);
 }
 
 async function selectStatementYear(year, signal) {
   assertNotCancelled(signal);
+  assertNoChaseStatementError();
   let item = statementYearOptions().find((candidate) => candidate.year === year);
   if (!item) return false;
   if (selectedStatementYear() !== year) {
@@ -1300,10 +1334,14 @@ async function selectStatementYear(year, signal) {
   }
   await waitFor(() => {
     assertNotCancelled(signal);
+    assertNoChaseStatementError();
     if (selectedStatementYear() !== year) return false;
+    if (statementUiIsLoading()) return false;
     const documents = extractStatementDocuments(document);
     return !documents.length || documents.every((item) => item.statementDate.startsWith(String(year)));
   }, `Chase did not finish loading ${year} statements.`);
+  await waitForStatementUi(300);
+  assertNoChaseStatementError();
   return true;
 }
 
@@ -1444,6 +1482,7 @@ async function collectChaseStatementBackfill(options) {
     const documents = new Map();
     for (const year of years) {
       assertNotCancelled(signal);
+      assertNoChaseStatementError();
       progress(`Finding ${year} statements for …${account.last4}…`);
       await selectStatementYear(year, signal);
       await expandStatementAccount(account.last4, year, signal);
@@ -1456,6 +1495,7 @@ async function collectChaseStatementBackfill(options) {
       const closingDate = `${item.statementDate.slice(0, 4)}-${item.statementDate.slice(4, 6)}-${item.statementDate.slice(6, 8)}`;
       return closingDate >= benefitStartDate && !imported.has(closingDate);
     }).sort((left, right) => left.statementDate.localeCompare(right.statementDate));
+    assertNoChaseStatementError();
     if (!documents.size) throw new Error(`No statements matched Hyatt card …${account.last4}.`);
     if (!wanted.length) return { results: [], failures: [], discovered: documents.size };
 
@@ -2100,7 +2140,7 @@ function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.3</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.4</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;
