@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ink Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.1.6
+// @version      1.1.7
 // @description  Tracks Chase Ink bonus-category spend, anniversary caps, and verified or estimated points locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -937,11 +937,78 @@ async function syncAllCards(onProgress = () => {}, options = {}) {
 
 // ---- packages/chase-core/app/capture.js ----
 const INTERESTING_URL = /(account|activity|transaction|reward|earn|spend|card)/i;
+const REQUEST_CONTEXT_MARKER = '__chaseTrackerRequestContextV1';
+
+function headerValue(headers, wantedName) {
+  if (!headers) return '';
+  try {
+    if (typeof headers.get === 'function') return String(headers.get(wantedName) ?? '').trim();
+  } catch {
+    // Fall through to the iterable/plain-object readers.
+  }
+  const wanted = wantedName.toLowerCase();
+  try {
+    for (const [name, value] of headers) {
+      if (String(name).toLowerCase() === wanted) return String(value ?? '').trim();
+    }
+  } catch {
+    // Some page-realm Headers objects are not iterable through the userscript proxy.
+  }
+  try {
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() === wanted) return String(value ?? '').trim();
+    }
+  } catch {
+    // Ignore header containers that cannot be enumerated.
+  }
+  return '';
+}
+
+function extractChaseRequestContext(input, init = {}, capturedAt = Date.now()) {
+  const sources = [input?.headers, init?.headers];
+  const readLatest = (name) => {
+    let value = '';
+    for (const headers of sources) value = headerValue(headers, name) || value;
+    return value;
+  };
+  const csrfToken = readLatest('X-Jpmc-Csrf-Token');
+  const channel = readLatest('X-Jpmc-Channel');
+  const clientRequestId = readLatest('X-Jpmc-Client-Request-Id');
+  if (!csrfToken && !channel && !clientRequestId) return null;
+  return { csrfToken, channel, clientRequestId, capturedAt };
+}
+
+function rememberChaseRequestContext(page, input, init) {
+  const captured = extractChaseRequestContext(input, init);
+  if (!captured) return;
+  const previous = page[REQUEST_CONTEXT_MARKER] ?? {};
+  page[REQUEST_CONTEXT_MARKER] = {
+    csrfToken: captured.csrfToken || previous.csrfToken || '',
+    channel: captured.channel || previous.channel || '',
+    clientRequestId: captured.clientRequestId || previous.clientRequestId || '',
+    capturedAt: captured.csrfToken ? captured.capturedAt : previous.capturedAt || captured.capturedAt
+  };
+}
+
+function chaseRequestContext(page = null) {
+  const target = page ?? (typeof unsafeWindow !== 'undefined'
+    ? unsafeWindow
+    : (typeof window !== 'undefined' ? window : null));
+  const context = target?.[REQUEST_CONTEXT_MARKER];
+  if (!context || typeof context !== 'object') return null;
+  return {
+    csrfToken: String(context.csrfToken ?? ''),
+    channel: String(context.channel ?? ''),
+    clientRequestId: String(context.clientRequestId ?? ''),
+    capturedAt: Number(context.capturedAt ?? 0)
+  };
+}
 
 function installChaseNetworkCapture(onNormalizedData, options = {}) {
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const marker = options.marker || '__chaseTrackerCaptureV1';
   const requestUrlKey = `${marker}Url`;
+  const requestHeadersKey = `${marker}Headers`;
   const label = options.label || 'Chase Tracker';
   const normalizePayload = options.normalizePayload
     || ((payload, url) => extractNormalizedData(payload, url, options.normalizerOptions));
@@ -964,6 +1031,7 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
     if (typeof page.fetch === 'function') {
       const originalFetch = page.fetch;
       page.fetch = async function chaseTrackerFetch(...args) {
+        rememberChaseRequestContext(page, args[0], args[1]);
         const response = await originalFetch.apply(this, args);
         const url = args[0]?.url ?? args[0] ?? response.url;
         void inspect(response, url);
@@ -975,11 +1043,19 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
     if (xhrPrototype) {
       const originalOpen = xhrPrototype.open;
       const originalSend = xhrPrototype.send;
+      const originalSetRequestHeader = xhrPrototype.setRequestHeader;
       xhrPrototype.open = function chaseTrackerOpen(method, url, ...rest) {
         this[requestUrlKey] = String(url);
+        this[requestHeadersKey] = {};
         return originalOpen.call(this, method, url, ...rest);
       };
+      xhrPrototype.setRequestHeader = function chaseTrackerSetRequestHeader(name, value) {
+        this[requestHeadersKey] ??= {};
+        this[requestHeadersKey][String(name)] = String(value);
+        return originalSetRequestHeader.call(this, name, value);
+      };
       xhrPrototype.send = function chaseTrackerSend(...args) {
+        rememberChaseRequestContext(page, null, { headers: this[requestHeadersKey] });
         this.addEventListener('load', () => {
           try {
             if (!INTERESTING_URL.test(this[requestUrlKey]) || this.status < 200 || this.status >= 300) return;
@@ -1706,7 +1782,7 @@ function createInkTrackerUi(handlers) {
     <div class="backdrop" role="presentation">
       <section class="modal" role="dialog" aria-modal="true" aria-label="Ink Tracker">
         <header class="header">
-          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v1.1.6</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
+          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v1.1.7</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
           <nav class="controls">
             <button data-view="summary" class="active">Summary</button>
             <button data-view="detail">Detailed</button>

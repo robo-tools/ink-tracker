@@ -9,6 +9,7 @@ import {
   mergeStatementCoverage,
   selectedStatementYear,
   statementAccountButton,
+  statementPdfUrlFromAccess,
   statementRequestOriginCandidates,
   statementYearOptions
 } from '../packages/chase-core/app/chase-statements.js';
@@ -173,6 +174,42 @@ test('statement requests prefer Chase\'s generated shard origin over the canonic
       'https://static.chasecdn.com/unrelated.js'
     ]
   }), ['https://secure27ea.chase.com', 'https://secure.chase.com']);
+});
+
+test('statement access response becomes a short-lived authorized PDF URL', () => {
+  const url = statementPdfUrlFromAccess({
+    code: 'SUCCESS',
+    docKey: 'authorized-document-key',
+    docSOR: 'STAR_MS',
+    docURI: '/svc/rr/documents/secure/idal/v5/pdfdoc/star/list'
+  }, {
+    csrfToken: 'current-session-token',
+    fromOrigin: 'https://secure27ea.chase.com'
+  });
+  assert.equal(url.origin, 'https://secure.chase.com');
+  assert.equal(url.searchParams.get('docKey'), 'authorized-document-key');
+  assert.equal(url.searchParams.get('csrfToken'), 'current-session-token');
+  assert.equal(url.searchParams.get('fromOrigin'), 'https://secure27ea.chase.com');
+  assert.equal(url.searchParams.get('download'), 'false');
+  assert.equal(url.searchParams.get('adaVersion'), 'false');
+});
+
+test('statement access response preserves Chase-supplied authorization parameters', () => {
+  const url = statementPdfUrlFromAccess({
+    code: 'SUCCESS',
+    docKey: 'fallback-key',
+    docURI: 'https://secure.chase.com/svc/rr/documents/secure/idal/v5/pdfdoc/star/list?docKey=issued-key&csrfToken=issued-token'
+  }, { csrfToken: 'captured-token', fromOrigin: 'https://secure.chase.com' });
+  assert.equal(url.searchParams.get('docKey'), 'issued-key');
+  assert.equal(url.searchParams.get('csrfToken'), 'issued-token');
+});
+
+test('statement access response rejects non-Chase document URLs', () => {
+  assert.throws(() => statementPdfUrlFromAccess({
+    code: 'SUCCESS',
+    docKey: 'key',
+    docURI: 'https://example.com/statement.pdf'
+  }), /unexpected statement document address/);
 });
 
 test('statement coverage only becomes complete with continuous start-to-recent periods', () => {
