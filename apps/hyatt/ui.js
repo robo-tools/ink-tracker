@@ -196,11 +196,11 @@ function personalSetup(metric, options = {}) {
         <div class="method-note"><strong>Full history</strong><span>We calculate lifetime qualifying spend modulo $5,000.</span></div>
         <div class="statement-backfill ${statementHistoryComplete ? 'complete' : ''}">
           <div><strong>${statementHistoryComplete ? '✓ Full history verified from Chase statements' : 'Older history from monthly statements'}</strong>
-          <p>Chase’s activity page and CSV export usually cover about two years. This optional one-time scan can use the monthly statements Chase still provides (normally up to seven years). It fetches each PDF directly in your signed-in Chase session, so it will not open PDF viewer windows.</p>
+          <p>Run this after the normal Refresh. The optional one-time scan opens Chase Statements &amp; Documents, selects every needed year, expands this card, and reads the monthly PDFs Chase still provides (normally up to seven years). It fetches each PDF directly in your signed-in Chase session, so it will not open PDF viewer windows.</p>
           <div class="statement-coverage">${statementCoverageSummary(metric)}</div></div>
           <div class="statement-actions">${options.statementBusy
             ? '<button type="button" data-action="cancel-statements">Cancel scan</button>'
-            : '<button type="button" class="primary" data-action="backfill-statements">Scan Chase statements</button><button type="button" data-action="import-statements">Import downloaded PDFs</button>'}</div>
+            : '<button type="button" class="primary" data-action="backfill-statements">Scan older Chase statements</button><button type="button" data-action="import-statements">Import downloaded PDFs</button>'}</div>
         </div>
         <label class="check"><input type="checkbox" name="historyConfirmed" ${(config.historyConfirmed || statementHistoryComplete) ? 'checked' : ''} ${statementHistoryComplete ? 'disabled' : ''}><span>${statementHistoryComplete ? 'The statement scan and recent activity form a continuous history from the Hyatt benefit start date.' : 'I confirm there were no qualifying purchases before the oldest captured transaction.'}</span></label>
       </div>
@@ -298,7 +298,7 @@ export function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.1</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.2</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;

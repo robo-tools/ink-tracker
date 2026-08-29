@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseChaseStatementPages, pdfTextItemsToLines } from '../packages/chase-core/lib/statements.js';
-import { mergeStatementCoverage } from '../packages/chase-core/app/chase-statements.js';
+import {
+  extractStatementDocuments,
+  mergeStatementCoverage,
+  selectedStatementYear,
+  statementAccountButton,
+  statementYearOptions
+} from '../packages/chase-core/app/chase-statements.js';
 
 const account = { id: 'hyatt-1234', name: 'World of Hyatt Credit Card (…1234)', last4: '1234' };
 
@@ -69,6 +75,55 @@ test('statement parser rejects a PDF belonging to a different card', () => {
 test('statement parser rejects missing payment or credit rows when Chase provides a summary total', () => {
   const pages = samplePages().map((page) => page.filter((line) => !line.includes('PAYMENT THANK YOU')));
   assert.throws(() => parseChaseStatementPages(pages, account), /payment\/credit reconciliation failed/);
+});
+
+test('statement discovery reads Chase styled-select years and its selected input value', () => {
+  const options = [2026, 2025, 2024].map((year) => ({
+    textContent: String(year),
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    querySelector: (selector) => selector === '.primary' ? { textContent: String(year) } : null
+  }));
+  const root = {
+    querySelectorAll: () => options,
+    querySelector: (selector) => selector === '#header-filterstyledselect-0' ? { value: '2025' } : null
+  };
+  assert.deepEqual(statementYearOptions(root).map((item) => item.year), [2026, 2025, 2024]);
+  assert.equal(selectedStatementYear(root), 2025);
+});
+
+test('statement discovery expands and matches the target account by last four', () => {
+  const buttons = [
+    { textContent: 'FREEDOM UNLIMITED (...9740)' },
+    { textContent: 'WORLD OF HYATT (...1234)' }
+  ];
+  assert.equal(statementAccountButton({ querySelectorAll: () => buttons }, '1234'), buttons[1]);
+});
+
+test('statement discovery derives the date from Chase table rows when the PDF link omits data-date', () => {
+  const row = {
+    textContent: 'Dec 15, 2022 Statement 4 pages',
+    querySelector: () => ({ textContent: 'Dec 15, 2022' })
+  };
+  const anchor = {
+    id: 'accountsTable-1-row0-cell3-requestThisDocumentAnchor-pdf',
+    dataset: { documentid: 'statement-document-id', accountid: 'account-document-id' },
+    textContent: 'Dec 15, 2022 Statement WORLD OF HYATT (...1234)',
+    closest: () => row
+  };
+  const root = {
+    querySelectorAll: () => [anchor],
+    querySelector: (selector) => selector === '#header-documentsAccordion-1'
+      ? { textContent: 'WORLD OF HYATT (...1234)' }
+      : null
+  };
+  assert.deepEqual(extractStatementDocuments(root, '1234'), [{
+    documentId: 'statement-document-id',
+    statementDate: '20221215',
+    last4: '1234',
+    accountDocumentId: 'account-document-id',
+    accountLabel: 'WORLD OF HYATT (...1234)'
+  }]);
 });
 
 test('statement coverage only becomes complete with continuous start-to-recent periods', () => {
