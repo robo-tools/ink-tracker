@@ -4,10 +4,32 @@ import { normalizeLast4 } from '../lib/normalize.js';
 const PDF_RESOURCE = 'CHASE_TRACKER_PDFJS';
 const PDF_WORKER_RESOURCE = 'CHASE_TRACKER_PDFJS_WORKER';
 const STATEMENTS_ROUTE = '#/dashboard/documents/myDocs/index;mode=documents';
+const YEAR_SETTLE_DELAY = Object.freeze({ min: 1_000, max: 1_500 });
+const PDF_REQUEST_DELAY = Object.freeze({ min: 600, max: 900 });
+const PDF_RETRY_DELAYS = Object.freeze([2_000, 5_000]);
 let pdfJsPromise = null;
 
 function waitForStatementUi(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function randomDelay({ min, max }) {
+  return Math.round(min + (Math.random() * (max - min)));
+}
+
+function waitWithCancellation(milliseconds, signal) {
+  assertNotCancelled(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(new DOMException('Statement backfill cancelled.', 'AbortError'));
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function waitFor(predicate, message, timeout = 20_000) {
@@ -195,7 +217,7 @@ async function selectStatementYear(year, signal) {
     const documents = extractStatementDocuments(document);
     return !documents.length || documents.every((item) => item.statementDate.startsWith(String(year)));
   }, `Chase did not finish loading ${year} statements.`);
-  await waitForStatementUi(300);
+  await waitWithCancellation(randomDelay(YEAR_SETTLE_DELAY), signal);
   assertNoChaseStatementError();
   return true;
 }
@@ -245,7 +267,7 @@ export async function parseChaseStatementPdf(bytes, account, fallbackStatementDa
   }
 }
 
-async function fetchStatementPdf(documentId) {
+async function fetchStatementPdf(documentId, signal) {
   const url = new URL('/svc/rr/documents/secure/idal/v5/pdfdoc/star/list', 'https://secure.chase.com');
   url.searchParams.set('docKey', documentId);
   url.searchParams.set('download', 'false');
@@ -254,12 +276,42 @@ async function fetchStatementPdf(documentId) {
   const pageFetch = typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function'
     ? unsafeWindow.fetch.bind(unsafeWindow)
     : fetch.bind(globalThis);
-  const response = await pageFetch(url.href, { credentials: 'include' });
-  if (!response.ok) throw new Error(`Chase returned HTTP ${response.status} for this statement.`);
+  const response = await pageFetch(url.href, { credentials: 'include', signal });
+  if (!response.ok) {
+    const error = new Error(`Chase returned HTTP ${response.status} for this statement.`);
+    error.status = response.status;
+    error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    throw error;
+  }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const signature = String.fromCharCode(...bytes.slice(0, 4));
-  if (signature !== '%PDF') throw new Error('Chase did not return a PDF. The session may have expired.');
+  if (signature !== '%PDF') {
+    const error = new Error('Chase did not return a PDF. The session may have expired.');
+    error.retryable = true;
+    throw error;
+  }
   return bytes;
+}
+
+export function isRetryableStatementFetchError(error) {
+  if (!error || error.name === 'AbortError') return false;
+  return error.retryable === true || ['TypeError', 'NetworkError', 'TimeoutError'].includes(error.name);
+}
+
+async function fetchStatementPdfWithRetry(documentId, options = {}) {
+  const { signal, onRetry = () => {} } = options;
+  for (let attempt = 0; ; attempt += 1) {
+    assertNotCancelled(signal);
+    try {
+      return await fetchStatementPdf(documentId, signal);
+    } catch (error) {
+      const baseDelay = PDF_RETRY_DELAYS[attempt];
+      if (baseDelay == null || !isRetryableStatementFetchError(error)) throw error;
+      const delay = Math.round(baseDelay * (0.9 + (Math.random() * 0.2)));
+      onRetry({ attempt: attempt + 2, delay, error });
+      await waitWithCancellation(delay, signal);
+    }
+  }
 }
 
 function daysBetween(left, right) {
@@ -362,7 +414,12 @@ export async function collectChaseStatementBackfill(options) {
       const displayDate = `${item.statementDate.slice(0, 4)}-${item.statementDate.slice(4, 6)}-${item.statementDate.slice(6, 8)}`;
       progress(`Parsing statement ${index + 1} of ${wanted.length} (${displayDate})…`);
       try {
-        const bytes = await fetchStatementPdf(item.documentId);
+        const bytes = await fetchStatementPdfWithRetry(item.documentId, {
+          signal,
+          onRetry: ({ attempt, delay }) => progress(
+            `Chase temporarily rejected ${displayDate}; retrying in ${Math.ceil(delay / 1_000)} seconds (attempt ${attempt} of 3)…`
+          )
+        });
         const result = await parseChaseStatementPdf(bytes, account, item.statementDate);
         results.push(result);
         imported.add(result.statementDate);
@@ -371,6 +428,9 @@ export async function collectChaseStatementBackfill(options) {
         const failure = { statementDate: displayDate, message: error?.message || String(error) };
         failures.push(failure);
         await onFailure(failure, { completed: index + 1, total: wanted.length });
+      }
+      if (index < wanted.length - 1) {
+        await waitWithCancellation(randomDelay(PDF_REQUEST_DELAY), signal);
       }
     }
     return { results, failures, discovered: documents.size };

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hyatt Card Elite Night Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.1.4
+// @version      1.1.5
 // @description  Tracks World of Hyatt personal and business card spend toward elite-night thresholds locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -1149,10 +1149,32 @@ function parseChaseStatementPages(pages, account, fallbackStatementDate = '') {
 const PDF_RESOURCE = 'CHASE_TRACKER_PDFJS';
 const PDF_WORKER_RESOURCE = 'CHASE_TRACKER_PDFJS_WORKER';
 const STATEMENTS_ROUTE = '#/dashboard/documents/myDocs/index;mode=documents';
+const YEAR_SETTLE_DELAY = Object.freeze({ min: 1_000, max: 1_500 });
+const PDF_REQUEST_DELAY = Object.freeze({ min: 600, max: 900 });
+const PDF_RETRY_DELAYS = Object.freeze([2_000, 5_000]);
 let pdfJsPromise = null;
 
 function waitForStatementUi(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function randomDelay({ min, max }) {
+  return Math.round(min + (Math.random() * (max - min)));
+}
+
+function waitWithCancellation(milliseconds, signal) {
+  assertNotCancelled(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(new DOMException('Statement backfill cancelled.', 'AbortError'));
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function waitFor(predicate, message, timeout = 20_000) {
@@ -1340,7 +1362,7 @@ async function selectStatementYear(year, signal) {
     const documents = extractStatementDocuments(document);
     return !documents.length || documents.every((item) => item.statementDate.startsWith(String(year)));
   }, `Chase did not finish loading ${year} statements.`);
-  await waitForStatementUi(300);
+  await waitWithCancellation(randomDelay(YEAR_SETTLE_DELAY), signal);
   assertNoChaseStatementError();
   return true;
 }
@@ -1390,7 +1412,7 @@ async function parseChaseStatementPdf(bytes, account, fallbackStatementDate = ''
   }
 }
 
-async function fetchStatementPdf(documentId) {
+async function fetchStatementPdf(documentId, signal) {
   const url = new URL('/svc/rr/documents/secure/idal/v5/pdfdoc/star/list', 'https://secure.chase.com');
   url.searchParams.set('docKey', documentId);
   url.searchParams.set('download', 'false');
@@ -1399,12 +1421,42 @@ async function fetchStatementPdf(documentId) {
   const pageFetch = typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function'
     ? unsafeWindow.fetch.bind(unsafeWindow)
     : fetch.bind(globalThis);
-  const response = await pageFetch(url.href, { credentials: 'include' });
-  if (!response.ok) throw new Error(`Chase returned HTTP ${response.status} for this statement.`);
+  const response = await pageFetch(url.href, { credentials: 'include', signal });
+  if (!response.ok) {
+    const error = new Error(`Chase returned HTTP ${response.status} for this statement.`);
+    error.status = response.status;
+    error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    throw error;
+  }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const signature = String.fromCharCode(...bytes.slice(0, 4));
-  if (signature !== '%PDF') throw new Error('Chase did not return a PDF. The session may have expired.');
+  if (signature !== '%PDF') {
+    const error = new Error('Chase did not return a PDF. The session may have expired.');
+    error.retryable = true;
+    throw error;
+  }
   return bytes;
+}
+
+function isRetryableStatementFetchError(error) {
+  if (!error || error.name === 'AbortError') return false;
+  return error.retryable === true || ['TypeError', 'NetworkError', 'TimeoutError'].includes(error.name);
+}
+
+async function fetchStatementPdfWithRetry(documentId, options = {}) {
+  const { signal, onRetry = () => {} } = options;
+  for (let attempt = 0; ; attempt += 1) {
+    assertNotCancelled(signal);
+    try {
+      return await fetchStatementPdf(documentId, signal);
+    } catch (error) {
+      const baseDelay = PDF_RETRY_DELAYS[attempt];
+      if (baseDelay == null || !isRetryableStatementFetchError(error)) throw error;
+      const delay = Math.round(baseDelay * (0.9 + (Math.random() * 0.2)));
+      onRetry({ attempt: attempt + 2, delay, error });
+      await waitWithCancellation(delay, signal);
+    }
+  }
 }
 
 function daysBetween(left, right) {
@@ -1507,7 +1559,12 @@ async function collectChaseStatementBackfill(options) {
       const displayDate = `${item.statementDate.slice(0, 4)}-${item.statementDate.slice(4, 6)}-${item.statementDate.slice(6, 8)}`;
       progress(`Parsing statement ${index + 1} of ${wanted.length} (${displayDate})…`);
       try {
-        const bytes = await fetchStatementPdf(item.documentId);
+        const bytes = await fetchStatementPdfWithRetry(item.documentId, {
+          signal,
+          onRetry: ({ attempt, delay }) => progress(
+            `Chase temporarily rejected ${displayDate}; retrying in ${Math.ceil(delay / 1_000)} seconds (attempt ${attempt} of 3)…`
+          )
+        });
         const result = await parseChaseStatementPdf(bytes, account, item.statementDate);
         results.push(result);
         imported.add(result.statementDate);
@@ -1516,6 +1573,9 @@ async function collectChaseStatementBackfill(options) {
         const failure = { statementDate: displayDate, message: error?.message || String(error) };
         failures.push(failure);
         await onFailure(failure, { completed: index + 1, total: wanted.length });
+      }
+      if (index < wanted.length - 1) {
+        await waitWithCancellation(randomDelay(PDF_REQUEST_DELAY), signal);
       }
     }
     return { results, failures, discovered: documents.size };
@@ -2140,7 +2200,7 @@ function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.4</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.5</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;

@@ -5,6 +5,7 @@ import {
   chaseStatementErrorMessage,
   extractStatementDocuments,
   elementIsVisible,
+  isRetryableStatementFetchError,
   mergeStatementCoverage,
   selectedStatementYear,
   statementAccountButton,
@@ -151,6 +152,14 @@ test('statement discovery surfaces a visible Chase service error instead of trea
   };
   const root = { querySelectorAll: () => [dialog] };
   assert.match(chaseStatementErrorMessage(root), /site isn't working/i);
+});
+
+test('statement PDF retries are limited to transient failures', () => {
+  assert.equal(isRetryableStatementFetchError({ status: 429, retryable: true, name: 'Error' }), true);
+  assert.equal(isRetryableStatementFetchError({ status: 503, retryable: true, name: 'Error' }), true);
+  assert.equal(isRetryableStatementFetchError({ name: 'NetworkError' }), true);
+  assert.equal(isRetryableStatementFetchError({ status: 403, retryable: false, name: 'Error' }), false);
+  assert.equal(isRetryableStatementFetchError({ name: 'AbortError' }), false);
 });
 
 test('statement coverage only becomes complete with continuous start-to-recent periods', () => {
