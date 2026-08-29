@@ -74,7 +74,7 @@ export function normalizeCategory(value, description = '') {
 
 export function inferTransactionKind(description, type, amountCents) {
   const text = `${type ?? ''} ${description ?? ''}`;
-  if (/payment|thank you|autopay/i.test(text)) return 'payment';
+  if (/\b(?:automatic payment|autopay|online payment|mobile payment|payment thank you|payment - thank you|thank you-mobile)\b/i.test(text)) return 'payment';
   if (/refund|return|reversal|statement credit|credit adjustment/i.test(text)) return 'credit';
   if (/interest|fee|cash advance/i.test(text)) return 'non_purchase';
   if (/sale|purchase|debit/i.test(text)) return 'purchase';

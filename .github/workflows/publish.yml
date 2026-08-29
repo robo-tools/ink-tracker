@@ -35,6 +35,9 @@ jobs:
       - name: Build userscripts
         run: node scripts/build.mjs
 
+      - name: Check built userscript syntax
+        run: node scripts/check-built.mjs
+
       - name: Verify release version
         run: node scripts/verify-release.mjs "$GITHUB_REF_NAME"
 

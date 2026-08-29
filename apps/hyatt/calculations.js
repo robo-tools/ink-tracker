@@ -25,10 +25,12 @@ export function hyattTransactionQualifies(transaction) {
 
 function coverageFor(state, account) {
   const activity = state.coverage?.[account.id]?.activity ?? null;
+  const statements = state.coverage?.[account.id]?.statements ?? null;
   const ownTransactions = (state.transactions ?? []).filter((transaction) => belongsToAccount(transaction, account));
   const dates = ownTransactions.map((transaction) => transaction.date).filter(Boolean).sort();
   return {
     activity,
+    statements,
     listEndVerified: Boolean(activity?.complete),
     earliest: activity?.earliest ?? dates[0] ?? null,
     latest: activity?.latest ?? dates.at(-1) ?? null,

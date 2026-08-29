@@ -19,7 +19,29 @@ test('personal full-history setup requires an explicit completeness confirmation
     productId: 'hyatt-personal',
     benefitStartDate: '2024-01-10',
     historyMode: 'full',
-    historyConfirmed: true
+    historyConfirmed: true,
+    historySource: 'user'
+  });
+});
+
+test('reconciled statement coverage can verify full history without a manual checkbox', () => {
+  const config = normalizeHyattSetup(personal, {
+    historyMode: 'full',
+    benefitStartDate: '2020-01-10'
+  }, {}, '2026-08-19', {
+    activity: { earliest: '2024-08-01' },
+    statements: {
+      earliest: '2020-01-02',
+      latest: '2024-08-02',
+      gaps: []
+    }
+  });
+  assert.deepEqual(config, {
+    productId: 'hyatt-personal',
+    benefitStartDate: '2020-01-10',
+    historyMode: 'full',
+    historyConfirmed: true,
+    historySource: 'statements'
   });
 });
 

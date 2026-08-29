@@ -152,15 +152,40 @@ function setupNarrative(metric) {
   return `The first captured transaction is ${gap} days after the current Hyatt benefits began. Confirm there really were no earlier qualifying purchases, or use a Chase baseline.`;
 }
 
-function personalSetup(metric) {
+function statementCoverageSummary(metric) {
+  const coverage = metric.coverage.statements;
+  if (!coverage?.statementCount) {
+    return '<span>No older statements imported yet.</span>';
+  }
+  const range = coverage.earliest && coverage.latest
+    ? `${formatMonthYear(coverage.earliest)} – ${formatMonthYear(coverage.latest)}`
+    : 'date range unavailable';
+  const issue = coverage.gaps?.length
+    ? ` · ${coverage.gaps.length} gap${coverage.gaps.length === 1 ? '' : 's'} remaining`
+    : '';
+  return `<span><strong>${coverage.statementCount} verified statement${coverage.statementCount === 1 ? '' : 's'}</strong> · ${escapeHtml(range)}${issue}</span>`;
+}
+
+function personalSetup(metric, options = {}) {
   const config = metric.config ?? {};
   const mode = config.historyMode ?? 'full';
   const baselineDollars = Number.isFinite(config.baselineProgressCents) ? (config.baselineProgressCents / 100).toFixed(2) : '';
+  const benefitStartDate = options.benefitStartDate ?? config.benefitStartDate ?? '';
+  const statementCoverage = metric.coverage.statements ?? {};
+  const activityEarliest = metric.coverage.activity?.earliest ?? statementCoverage.activityEarliest ?? '';
+  const statementHistoryComplete = Boolean(
+    statementCoverage.earliest
+    && benefitStartDate
+    && statementCoverage.earliest <= benefitStartDate
+    && activityEarliest
+    && statementCoverage.latest >= activityEarliest
+    && !statementCoverage.gaps?.length
+  );
   return `<section class="setup-view"><button class="back-link" data-action="setup-back">← Back to summary</button>
     <h2>Set up …${escapeHtml(metric.account.last4)}</h2>
     <p class="setup-lead">The personal card’s $5,000 counter rolls forward for the life of the card. Choose the strongest starting information you have.</p>
     <form data-setup-form data-account-id="${escapeHtml(metric.account.id)}" data-product-type="personal">
-      <label><span>Current Hyatt benefits began</span><small class="field-help">Usually the date you opened this Hyatt card. If you product-changed or converted into it, use the effective change date instead—not the first-purchase or anniversary date.</small><input type="date" name="benefitStartDate" value="${escapeHtml(config.benefitStartDate ?? '')}" required></label>
+      <label><span>Current Hyatt benefits began</span><small class="field-help">Usually the date you opened this Hyatt card. If you product-changed or converted into it, use the effective change date instead—not the first-purchase or anniversary date.</small><input type="date" name="benefitStartDate" value="${escapeHtml(benefitStartDate)}" required></label>
       <p class="coverage-summary" data-opening-summary data-earliest="${escapeHtml(metric.coverage.earliest ?? '')}">${setupNarrative(metric)}</p>
       <label><span>Initialization method</span><select name="historyMode">
         <option value="full" ${mode === 'full' ? 'selected' : ''}>Complete transaction history</option>
@@ -169,7 +194,15 @@ function personalSetup(metric) {
       </select></label>
       <div class="mode-panel" data-for-mode="full">
         <div class="method-note"><strong>Full history</strong><span>We calculate lifetime qualifying spend modulo $5,000.</span></div>
-        <label class="check"><input type="checkbox" name="historyConfirmed" ${config.historyConfirmed ? 'checked' : ''}><span>I confirm there were no qualifying purchases before the oldest captured transaction.</span></label>
+        <div class="statement-backfill ${statementHistoryComplete ? 'complete' : ''}">
+          <div><strong>${statementHistoryComplete ? '✓ Full history verified from Chase statements' : 'Older history from monthly statements'}</strong>
+          <p>Chase’s activity page and CSV export usually cover about two years. This optional one-time scan can use the monthly statements Chase still provides (normally up to seven years). It fetches each PDF directly in your signed-in Chase session, so it will not open PDF viewer windows.</p>
+          <div class="statement-coverage">${statementCoverageSummary(metric)}</div></div>
+          <div class="statement-actions">${options.statementBusy
+            ? '<button type="button" data-action="cancel-statements">Cancel scan</button>'
+            : '<button type="button" class="primary" data-action="backfill-statements">Scan Chase statements</button><button type="button" data-action="import-statements">Import downloaded PDFs</button>'}</div>
+        </div>
+        <label class="check"><input type="checkbox" name="historyConfirmed" ${(config.historyConfirmed || statementHistoryComplete) ? 'checked' : ''} ${statementHistoryComplete ? 'disabled' : ''}><span>${statementHistoryComplete ? 'The statement scan and recent activity form a continuous history from the Hyatt benefit start date.' : 'I confirm there were no qualifying purchases before the oldest captured transaction.'}</span></label>
       </div>
       <div class="mode-panel" data-for-mode="baseline">
         <div class="method-note"><strong>Chase baseline</strong><span>Use a Chase secure message to ask how much spend remains before the next two qualifying nights.</span></div>
@@ -188,8 +221,8 @@ function personalSetup(metric) {
   </section>`;
 }
 
-function setupView(metric) {
-  return personalSetup(metric);
+function setupView(metric, options) {
+  return personalSetup(metric, options);
 }
 
 function itemDateRange(items) {
@@ -200,8 +233,12 @@ function itemDateRange(items) {
 function debugView(state, captureStatus) {
   const rows = (state.accounts ?? []).map((account) => {
     const coverage = state.coverage?.[account.id]?.activity ?? {};
+    const statements = state.coverage?.[account.id]?.statements ?? {};
     const transactions = (state.transactions ?? []).filter((transaction) => String(transaction.accountId) === String(account.id));
-    return `<div><dt>${escapeHtml(displayAccountName(account.name))} …${escapeHtml(account.last4)}</dt><dd>${coverage.complete ? 'List end verified' : 'Unverified'} · ${itemDateRange(transactions)}</dd></div>`;
+    const statementText = statements.statementCount
+      ? `${statements.statementCount} verified statement${statements.statementCount === 1 ? '' : 's'} (${formatMonthYear(statements.earliest)} – ${formatMonthYear(statements.latest)})${statements.complete ? ' · continuous to recent activity' : ''}`
+      : 'No statement backfill';
+    return `<div><dt>${escapeHtml(displayAccountName(account.name))} …${escapeHtml(account.last4)}</dt><dd>${coverage.complete ? 'List end verified' : 'Unverified'} · ${itemDateRange(transactions)}<br>${escapeHtml(statementText)}</dd></div>`;
   }).join('');
   return `<div class="debug-grid">
     <section><h2>Local data</h2><dl>
@@ -209,11 +246,11 @@ function debugView(state, captureStatus) {
       <div><dt>Activity coverage</dt><dd>${itemDateRange(state.transactions ?? [])}</dd></div><div><dt>Captured payloads</dt><dd>${state.captureStats?.payloads ?? 0}</dd></div>
       <div><dt>Network listener</dt><dd>${captureStatus?.installed ? 'Active' : 'Fallback only'}</dd></div>
     </dl></section>
-    <section><h2>Data controls</h2><p>CSV imports are useful when Chase’s online activity list does not reach far enough back.</p><div class="action-stack">
+    <section><h2>Data controls</h2><p>CSV imports cover recent activity. Personal-card setup can optionally scan older monthly statement PDFs.</p><div class="action-stack">
       <button data-action="import">Import Chase CSV</button><button data-action="export">Export tracker JSON</button><button class="danger" data-action="clear">Clear Hyatt tracker data</button>
     </div></section>
     <section class="wide"><h2>Coverage by card</h2><dl class="coverage-list">${rows || '<div><dt>No cards</dt><dd>None</dd></div>'}</dl></section>
-    <section class="wide"><h2>Privacy boundary</h2><p>Only normalized card identifiers, dates, descriptions, amounts, categories, and setup values are stored locally through Tampermonkey. Raw Chase responses and authentication data are never persisted.</p></section>
+    <section class="wide"><h2>Privacy boundary</h2><p>Only normalized card identifiers, dates, descriptions, amounts, categories, statement coverage dates, and setup values are stored locally through Tampermonkey. Raw Chase responses, statement PDFs, document keys, full account numbers, and authentication data are never persisted.</p></section>
   </div>`;
 }
 
@@ -250,8 +287,9 @@ const STYLES = `
   .detail-note { margin:7px 0 9px; font-size:11px; } .detail-empty { padding:30px 16px; border:1px dashed #ccd5df; border-radius:8px; color:#65717c; text-align:center; } .table-wrap { overflow:auto; border:1px solid #dfe3e7; border-radius:8px; } table { width:100%; border-collapse:collapse; font-size:12px; } th { position:sticky; top:0; z-index:1; padding:8px; background:#f1f4f7; color:#44505d; text-align:left; } td { max-width:300px; padding:8px; overflow:hidden; border-top:1px solid #edf0f2; text-overflow:ellipsis; white-space:nowrap; } td.merchant { min-width:200px; } .right { text-align:right; } .credit { color:#28713d; } .card-pill { color:#123e72; font-weight:700; } .verify { display:inline-block; padding:2px 7px; border-radius:999px; font-size:10px; font-weight:700; } .verify.good { background:#e1f1e4; color:#28673a; } .verify.neutral { background:#edf0f2; color:#616970; }
   .setup-view { max-width:760px; margin:0 auto; padding:8px 0 18px; } .back-link { margin-bottom:10px; padding-left:0; border:0; background:none; color:#0d6374; } .setup-lead { margin:5px 0 16px; color:#626d77; } form { display:grid; gap:12px; } label { display:grid; gap:4px; color:#3f4a54; } label > span:first-child { font-weight:700; } .field-help { margin-bottom:3px; color:#68737f; font-size:11px; font-weight:400; line-height:1.4; } input,select { width:100%; padding:8px 9px; border:1px solid #bec8d2; border-radius:6px; background:#fff; color:#26323d; } .coverage-summary { padding:10px 12px; border-radius:7px; background:#eef6f7; color:#315b63; }
   .mode-panel { display:none; gap:10px; padding:12px; border:1px solid #dce3e7; border-radius:8px; } .mode-panel.active { display:grid; } .method-note { display:flex; justify-content:space-between; gap:15px; padding:9px 11px; border-radius:7px; background:#f1f6f7; } .method-note span { color:#65717c; text-align:right; } .method-note.warn { background:#fff6e6; } .check { grid-template-columns:auto 1fr; align-items:start; gap:8px; } .check input { width:auto; margin-top:3px; } .check span { font-weight:400; } .inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .setup-actions { display:flex; gap:8px; justify-content:flex-end; }
+  .statement-backfill { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:11px; border:1px solid #ead3a5; border-radius:8px; background:#fff9ee; } .statement-backfill.complete { border-color:#bfdcc7; background:#f1f8f3; } .statement-backfill p { max-width:560px; margin-top:3px; color:#65717c; font-size:11px; } .statement-coverage { margin-top:6px; color:#6f5730; font-size:11px; } .statement-backfill.complete .statement-coverage { color:#2f6d41; } .statement-actions { display:grid; flex:none; gap:6px; min-width:170px; }
   .debug-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding-top:8px; } .debug-grid section { padding:14px; border:1px solid #e0e4e8; border-radius:8px; } .debug-grid h2 { margin-bottom:8px; font-size:15px; } dl { margin:0; } dl div { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid #edf0f2; } dd { margin:0; font-weight:700; text-align:right; } .action-stack { display:grid; gap:7px; margin-top:10px; } .danger { border-color:#b44; color:#a22; } .wide { grid-column:1/-1; }
-  @media (max-width:720px) { .backdrop { padding:8px; } .header { align-items:flex-start; flex-wrap:wrap; } .brand { width:100%; } .controls { width:100%; overflow-x:auto; } .card-title-row,.breakdown,.certificate > div:first-child,.method-note,.detail-heading,.setup-callout,.coverage-note { align-items:flex-start; flex-direction:column; } .nights { text-align:left; } .inline-fields,.debug-grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
+  @media (max-width:720px) { .backdrop { padding:8px; } .header { align-items:flex-start; flex-wrap:wrap; } .brand { width:100%; } .controls { width:100%; overflow-x:auto; } .card-title-row,.breakdown,.certificate > div:first-child,.method-note,.detail-heading,.setup-callout,.coverage-note,.statement-backfill { align-items:flex-start; flex-direction:column; } .statement-actions { width:100%; } .nights { text-align:left; } .inline-fields,.debug-grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
 `;
 
 export function createHyattTrackerUi(handlers) {
@@ -260,10 +298,10 @@ export function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.0.3</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.0</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
-    </section></div><input type="file" accept=".csv,text/csv" multiple hidden>`;
+    </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;
   document.documentElement.append(host);
 
   let state = { accounts: [], transactions: [], cardConfig: {}, coverage: {} };
@@ -272,9 +310,13 @@ export function createHyattTrackerUi(handlers) {
   let detailFilters = { cardId: 'all', mode: 'eligible' };
   let captureStatus = null;
   let busy = false;
+  let statementBackfillController = null;
+  let statementImportContext = null;
+  const setupDraftDates = new Map();
   const backdrop = root.querySelector('.backdrop');
   const status = root.querySelector('.status');
-  const fileInput = root.querySelector('input[type="file"]');
+  const fileInput = root.querySelector('[data-file-input="csv"]');
+  const statementFileInput = root.querySelector('[data-file-input="statements"]');
 
   function metrics() { return calculateAllHyattCards(state); }
   function activateModePanels() {
@@ -285,7 +327,10 @@ export function createHyattTrackerUi(handlers) {
     const allMetrics = busy ? [] : metrics();
     root.querySelector('.updated').textContent = `Updated ${formatUpdated(state.updatedAt)}`;
     const setupMetric = setupAccountId ? allMetrics.find((metric) => String(metric.account.id) === String(setupAccountId)) : null;
-    root.querySelector('.body').innerHTML = busy ? syncingView() : setupMetric ? setupView(setupMetric)
+    root.querySelector('.body').innerHTML = busy ? syncingView() : setupMetric ? setupView(setupMetric, {
+      benefitStartDate: setupDraftDates.get(String(setupMetric.account.id)),
+      statementBusy: Boolean(statementBackfillController)
+    })
       : view === 'summary' ? allMetrics.length ? summaryView(allMetrics) : emptySummary()
       : view === 'detail' ? detailView(allMetrics, detailFilters) : debugView(state, captureStatus);
     root.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', !setupAccountId && button.dataset.view === view));
@@ -296,7 +341,11 @@ export function createHyattTrackerUi(handlers) {
   async function run(action, startMessage) {
     showStatus(startMessage);
     try { await action((message) => showStatus(message)); hideStatus(); return true; }
-    catch (error) { showStatus(error?.message || String(error), true); return false; }
+    catch (error) {
+      const cancelled = error?.name === 'AbortError';
+      showStatus(cancelled ? 'Statement scan cancelled. Statements already completed were kept.' : error?.message || String(error), !cancelled);
+      return false;
+    }
   }
 
   root.addEventListener('click', async (event) => {
@@ -332,6 +381,28 @@ export function createHyattTrackerUi(handlers) {
       render();
     }
     if (action === 'import') fileInput.click();
+    if (action === 'backfill-statements') {
+      const form = root.querySelector('[data-setup-form]');
+      const benefitStartDate = form?.elements?.benefitStartDate?.value;
+      if (!benefitStartDate) { showStatus('Enter when the current Hyatt benefits began first.', true); return; }
+      if (!confirm('Scan Chase monthly statements for this card? The current tab will briefly visit Statements & Documents and fetch each needed PDF directly. No PDF viewer windows will open, and raw PDFs will not be saved.')) return;
+      statementBackfillController = new AbortController();
+      render();
+      await run(
+        (progress) => handlers.backfillStatements(form.dataset.accountId, benefitStartDate, progress, statementBackfillController.signal),
+        'Finding older Chase statements…'
+      );
+      statementBackfillController = null;
+      render();
+    }
+    if (action === 'cancel-statements') statementBackfillController?.abort();
+    if (action === 'import-statements') {
+      const form = root.querySelector('[data-setup-form]');
+      const benefitStartDate = form?.elements?.benefitStartDate?.value;
+      if (!benefitStartDate) { showStatus('Enter when the current Hyatt benefits began first.', true); return; }
+      statementImportContext = { accountId: form.dataset.accountId, benefitStartDate };
+      statementFileInput.click();
+    }
     if (action === 'export') handlers.exportData();
     if (action === 'clear' && confirm('Clear all locally stored Hyatt Tracker data?')) await run(handlers.clear, 'Clearing local data…');
   });
@@ -341,6 +412,8 @@ export function createHyattTrackerUi(handlers) {
   });
   root.addEventListener('input', (event) => {
     if (!event.target.matches('input[name="benefitStartDate"]')) return;
+    const form = event.target.closest('[data-setup-form]');
+    if (form) setupDraftDates.set(String(form.dataset.accountId), event.target.value);
     const summary = root.querySelector('[data-opening-summary]');
     const earliest = summary?.dataset.earliest;
     const start = new Date(`${event.target.value}T00:00:00Z`);
@@ -362,6 +435,7 @@ export function createHyattTrackerUi(handlers) {
     payload.yearHistoryConfirmed = form.querySelector('[name="yearHistoryConfirmed"]')?.checked ?? false;
     const saved = await run((progress) => handlers.saveSetup(form.dataset.accountId, payload, progress), 'Saving setup…');
     if (!saved) return;
+    setupDraftDates.delete(String(form.dataset.accountId));
     setupAccountId = null;
     view = 'summary';
     render();
@@ -371,6 +445,18 @@ export function createHyattTrackerUi(handlers) {
   fileInput.addEventListener('change', async () => {
     for (const file of fileInput.files ?? []) await run((progress) => handlers.importCsv(file, progress), `Importing ${file.name}…`);
     fileInput.value = '';
+  });
+  statementFileInput.addEventListener('change', async () => {
+    const files = [...(statementFileInput.files ?? [])];
+    const context = statementImportContext;
+    statementFileInput.value = '';
+    statementImportContext = null;
+    if (!files.length || !context) return;
+    await run(
+      (progress) => handlers.importStatementPdfs(files, context.accountId, context.benefitStartDate, progress),
+      `Verifying ${files.length} statement PDF${files.length === 1 ? '' : 's'}…`
+    );
+    render();
   });
 
   return {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  inferTransactionKind,
   normalizeChaseActivityRow,
   normalizeChaseCsv,
   normalizeCategory,
@@ -52,4 +53,10 @@ test('Chase CSV signs and reported categories are normalized', () => {
 test('merchant inference recognizes core Ink categories', () => {
   assert.equal(normalizeCategory('', 'COMCAST CABLE').category, 'internet');
   assert.equal(normalizeCategory('', 'FEDEX OFFICE').category, 'shipping');
+});
+
+test('merchant names containing bill payment remain purchases while Chase payments are excluded', () => {
+  assert.equal(inferTransactionKind('ATT BILL PAYMENT', '', 5_000), 'purchase');
+  assert.equal(inferTransactionKind('Payment Thank You-Mobile', '', -5_000), 'payment');
+  assert.equal(inferTransactionKind('AUTOMATIC PAYMENT', '', -5_000), 'payment');
 });

@@ -31,6 +31,17 @@ for (const app of apps) {
   );
 }
 
+const hyattMetadata = await readFile(resolve(root, 'apps/hyatt/metadata.txt'), 'utf8');
+const pdfModule = await readFile(resolve(root, 'dist/vendor/pdf-5.6.205.min.mjs'));
+const pdfWorker = await readFile(resolve(root, 'dist/vendor/pdf.worker-5.6.205.min.mjs'));
+checks.push(
+  [hyattMetadata.includes('// @grant        GM.getResourceText'), 'Hyatt metadata does not grant access to cached parser resources'],
+  [hyattMetadata.includes('/vendor/pdf-5.6.205.min.mjs'), 'Hyatt metadata does not reference the pinned PDF.js module'],
+  [hyattMetadata.includes('/vendor/pdf.worker-5.6.205.min.mjs'), 'Hyatt metadata does not reference the pinned PDF.js worker'],
+  [pdfModule.length > 400_000, 'built PDF.js module is missing or unexpectedly small'],
+  [pdfWorker.length > 1_000_000, 'built PDF.js worker is missing or unexpectedly small']
+);
+
 const failures = checks.filter(([passed]) => !passed).map(([, message]) => message);
 if (failures.length) throw new Error(failures.join('\n'));
 

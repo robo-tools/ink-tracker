@@ -2,6 +2,7 @@ import { extractNormalizedData, normalizeChaseCsv, normalizeLast4 } from '../../
 import { commitFullSync, createStorage, emptyState, mergeState, mergeSupplementalTransactions, repairStateAccountMetadata } from '../../packages/chase-core/app/storage.js';
 import { extractChaseAccounts, extractChaseActivity, syncAllCards } from '../../packages/chase-core/app/chase-dom.js';
 import { installChaseNetworkCapture } from '../../packages/chase-core/app/capture.js';
+import { collectChaseStatementBackfill, mergeStatementCoverage, parseChaseStatementPdf } from '../../packages/chase-core/app/chase-statements.js';
 import { createHyattTrackerUi } from './ui.js';
 import { identifyHyattProduct, isHyattAccount } from './products.js';
 import { normalizeHyattSetup } from './setup.js';
@@ -48,6 +49,30 @@ void (async function startHyattTracker() {
     void save(next);
   }
 
+  function accountActivityEarliest(account) {
+    const covered = state.coverage?.[account.id]?.activity?.earliest;
+    if (covered) return covered;
+    const retained = state.coverage?.[account.id]?.statements?.activityEarliest;
+    if (retained) return retained;
+    return (state.transactions ?? []).filter((transaction) =>
+      String(transaction.accountId) === String(account.id) || transaction.last4 === account.last4
+    ).map((transaction) => transaction.date).filter(Boolean).sort()[0] ?? '';
+  }
+
+  async function saveStatementResult(account, result, benefitStartDate) {
+    const statements = mergeStatementCoverage(
+      state.coverage?.[account.id]?.statements ?? {},
+      [result],
+      { benefitStartDate, activityEarliest: accountActivityEarliest(account) }
+    );
+    await save(mergeState(state, {
+      accounts: [account],
+      transactions: result.transactions,
+      coverage: { [account.id]: { statements } }
+    }, 'chase-statement'));
+    return statements;
+  }
+
   const captureStatus = installChaseNetworkCapture(acceptCapture, {
     marker: '__hyattTrackerCaptureV1',
     label: 'Hyatt Tracker',
@@ -88,7 +113,13 @@ void (async function startHyattTracker() {
     async saveSetup(accountId, input, progress) {
       const account = state.accounts.find((item) => String(item.id) === String(accountId));
       if (!account) throw new Error('That Hyatt card is no longer available. Refresh and try again.');
-      const config = normalizeHyattSetup(account, input, state.cardConfig?.[accountId] ?? {});
+      const config = normalizeHyattSetup(
+        account,
+        input,
+        state.cardConfig?.[accountId] ?? {},
+        new Date(),
+        state.coverage?.[accountId] ?? {}
+      );
 
       await save({
         ...state,
@@ -96,6 +127,69 @@ void (async function startHyattTracker() {
       });
       progress('Card setup saved.');
       await new Promise((resolve) => setTimeout(resolve, 450));
+    },
+
+    async backfillStatements(accountId, benefitStartDate, progress, signal) {
+      const account = state.accounts.find((item) => String(item.id) === String(accountId));
+      if (!account) throw new Error('That Hyatt card is no longer available. Refresh and try again.');
+      if (identifyHyattProduct(account.name)?.type !== 'personal') {
+        throw new Error('The multi-year statement backfill is only needed for the personal Hyatt card.');
+      }
+      const activityEarliest = accountActivityEarliest(account);
+      const existing = mergeStatementCoverage(
+        state.coverage?.[account.id]?.statements ?? {},
+        [],
+        { benefitStartDate, activityEarliest }
+      );
+      await save(mergeState(state, { coverage: { [account.id]: { statements: existing } } }, 'chase-statement'));
+      const importedStatementDates = (existing.periods ?? []).map((period) => period.statementDate).filter(Boolean);
+      let savedCount = 0;
+      const result = await collectChaseStatementBackfill({
+        account,
+        benefitStartDate,
+        activityEarliest,
+        importedStatementDates,
+        progress,
+        signal,
+        onResult: async (statement, itemProgress) => {
+          savedCount += 1;
+          await saveStatementResult(account, statement, benefitStartDate);
+          progress(`Saved statement ${itemProgress.completed} of ${itemProgress.total}; ${savedCount} added this run.`);
+        }
+      });
+      if (result.failures.length) {
+        const first = result.failures[0];
+        throw new Error(`${savedCount} statement${savedCount === 1 ? '' : 's'} saved; ${result.failures.length} could not be verified. First failure (${first.statementDate}): ${first.message} Retry or import that PDF manually.`);
+      }
+      progress(savedCount
+        ? `${savedCount} verified statement${savedCount === 1 ? '' : 's'} added. Completed months were saved locally.`
+        : 'No new statements were needed; all discovered months were already imported.');
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    },
+
+    async importStatementPdfs(files, accountId, benefitStartDate, progress) {
+      const account = state.accounts.find((item) => String(item.id) === String(accountId));
+      if (!account) throw new Error('That Hyatt card is no longer available. Refresh and try again.');
+      let savedCount = 0;
+      const failures = [];
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        progress(`Verifying PDF ${index + 1} of ${files.length} (${file.name})…`);
+        try {
+          const compactDate = file.name.match(/(?:^|\D)(20\d{2})[-_]?([01]\d)[-_]?([0-3]\d)(?:\D|$)/);
+          const fallbackDate = compactDate ? `${compactDate[1]}${compactDate[2]}${compactDate[3]}` : '';
+          const result = await parseChaseStatementPdf(await file.arrayBuffer(), account, fallbackDate);
+          await saveStatementResult(account, result, benefitStartDate);
+          savedCount += 1;
+        } catch (error) {
+          failures.push(`${file.name}: ${error?.message || String(error)}`);
+        }
+      }
+      if (failures.length) {
+        throw new Error(`${savedCount} PDF${savedCount === 1 ? '' : 's'} saved; ${failures.length} failed verification. ${failures[0]}`);
+      }
+      progress(`${savedCount} verified statement PDF${savedCount === 1 ? '' : 's'} added.`);
+      await new Promise((resolve) => setTimeout(resolve, 650));
     },
 
     async importCsv(file, progress) {

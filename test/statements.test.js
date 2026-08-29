@@ -1,0 +1,82 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { parseChaseStatementPages, pdfTextItemsToLines } from '../packages/chase-core/lib/statements.js';
+import { mergeStatementCoverage } from '../packages/chase-core/app/chase-statements.js';
+
+const account = { id: 'hyatt-1234', name: 'World of Hyatt Credit Card (…1234)', last4: '1234' };
+
+function samplePages(purchaseSummary = '$1,250.00') {
+  return [[
+    'Account Number: 0000 0000 0000 1234',
+    'Statement Date: 01/09/26',
+    'Opening/Closing Date 12/10/25 - 01/09/26',
+    `Purchases +${purchaseSummary}`,
+    'Payments, Credits -$1,250.00',
+    'PURCHASES',
+    '12/30 12/31 OFFICE STORE 1,200.00',
+    '01/05 01/06 ATT BILL PAYMENT 50.00',
+    'PAYMENTS AND OTHER CREDITS',
+    '01/07 01/07 PAYMENT THANK YOU-MOBILE -1,250.00'
+  ]];
+}
+
+test('PDF text items are grouped into visual lines and left-to-right order', () => {
+  const lines = pdfTextItemsToLines([
+    { str: 'STORE', transform: [1, 0, 0, 1, 80, 700] },
+    { str: '12/31', transform: [1, 0, 0, 1, 10, 700.4] },
+    { str: '$10.00', transform: [1, 0, 0, 1, 180, 700] },
+    { str: 'Second line', transform: [1, 0, 0, 1, 10, 680] }
+  ]);
+  assert.deepEqual(lines, ['12/31 STORE $10.00', 'Second line']);
+});
+
+test('statement parser reconciles purchases and resolves year rollover', () => {
+  const result = parseChaseStatementPages(samplePages(), account);
+  assert.equal(result.openingDate, '2025-12-10');
+  assert.equal(result.closingDate, '2026-01-09');
+  assert.equal(result.purchaseTotalCents, 125_000);
+  assert.equal(result.parsedPurchaseCents, 125_000);
+  assert.equal(result.parsedCreditCents, -125_000);
+  assert.deepEqual(result.transactions.map((item) => item.date), ['2025-12-31', '2026-01-06', '2026-01-07']);
+  assert.equal(result.transactions[1].description, 'ATT BILL PAYMENT');
+  assert.equal(result.transactions[1].kind, 'purchase');
+  assert.equal(result.transactions[1].spendCents, 5_000);
+  assert.equal(result.transactions[2].kind, 'payment');
+  assert.equal(result.transactions[2].spendCents, 0);
+});
+
+test('statement parser rejects the entire statement when Chase totals do not reconcile', () => {
+  assert.throws(() => parseChaseStatementPages(samplePages('$1,249.99'), account), /reconciliation failed/);
+});
+
+test('statement parser rejects a PDF belonging to a different card', () => {
+  const pages = samplePages().map((page) => page.map((line) => line.replace('0000 0000 0000 1234', '0000 0000 0000 9876')));
+  assert.throws(() => parseChaseStatementPages(pages, account), /does not match the selected card ending/);
+});
+
+test('statement parser rejects missing payment or credit rows when Chase provides a summary total', () => {
+  const pages = samplePages().map((page) => page.filter((line) => !line.includes('PAYMENT THANK YOU')));
+  assert.throws(() => parseChaseStatementPages(pages, account), /payment\/credit reconciliation failed/);
+});
+
+test('statement coverage only becomes complete with continuous start-to-recent periods', () => {
+  const first = {
+    parserVersion: 1, openingDate: '2020-01-02', closingDate: '2020-02-01', statementDate: '2020-02-01',
+    purchaseTotalCents: 10_000, transactionCount: 1
+  };
+  const second = {
+    parserVersion: 1, openingDate: '2020-02-02', closingDate: '2020-03-01', statementDate: '2020-03-01',
+    purchaseTotalCents: 20_000, transactionCount: 2
+  };
+  const incomplete = mergeStatementCoverage({}, [first], {
+    benefitStartDate: '2020-01-10', activityEarliest: '2020-02-15'
+  });
+  assert.equal(incomplete.complete, false);
+
+  const complete = mergeStatementCoverage(incomplete, [second], {
+    benefitStartDate: '2020-01-10', activityEarliest: '2020-02-15'
+  });
+  assert.equal(complete.complete, true);
+  assert.equal(complete.statementCount, 2);
+  assert.deepEqual(complete.gaps, []);
+});

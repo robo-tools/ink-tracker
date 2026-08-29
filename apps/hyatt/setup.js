@@ -1,7 +1,7 @@
 import { formatDateOnly, parseDateOnly } from '../../packages/chase-core/lib/dates.js';
 import { getHyattProductRule } from './products.js';
 
-export function normalizeHyattSetup(account, input, existing = {}, asOf = new Date()) {
+export function normalizeHyattSetup(account, input, existing = {}, asOf = new Date(), coverage = {}) {
   const rule = getHyattProductRule(account?.productId, account?.name);
   if (!rule) throw new Error('This is not a supported World of Hyatt card.');
   const currentYear = (parseDateOnly(asOf) ?? new Date()).getUTCFullYear();
@@ -21,8 +21,20 @@ export function normalizeHyattSetup(account, input, existing = {}, asOf = new Da
   const config = { productId: rule.id, benefitStartDate, historyMode: mode };
 
   if (mode === 'full') {
-    if (!input.historyConfirmed) throw new Error('Confirm that no qualifying purchases are missing, or choose a baseline method.');
+    const statements = coverage.statements ?? {};
+    const activityEarliest = coverage.activity?.earliest ?? statements.activityEarliest ?? '';
+    const statementHistoryComplete = Boolean(
+      statements.earliest
+      && statements.earliest <= benefitStartDate
+      && activityEarliest
+      && statements.latest >= activityEarliest
+      && !statements.gaps?.length
+    );
+    if (!input.historyConfirmed && !statementHistoryComplete) {
+      throw new Error('Confirm that no qualifying purchases are missing, backfill the older Chase statements, or choose a baseline method.');
+    }
     config.historyConfirmed = true;
+    config.historySource = statementHistoryComplete ? 'statements' : 'user';
   }
 
   if (mode === 'baseline') {

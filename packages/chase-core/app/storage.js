@@ -46,7 +46,10 @@ function transactionMatchScore(left, right) {
 }
 
 function richness(transaction) {
-  let score = transaction.source === 'network' ? 3 : transaction.source === 'chase-csv' ? 2 : 1;
+  let score = transaction.source === 'network' ? 3
+    : transaction.source === 'chase-csv' ? 2
+    : transaction.source === 'chase-dom' ? 1
+    : 0;
   if (transaction.categorySource === 'reported') score += 4;
   if (Number.isFinite(transaction.reportedMultiplier)) score += 2;
   if (Number.isFinite(transaction.reportedPoints)) score += 2;

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,6 +31,8 @@ const apps = [
     metadata: 'apps/hyatt/metadata.txt',
     sources: [
       ...sharedSources,
+      'packages/chase-core/lib/statements.js',
+      'packages/chase-core/app/chase-statements.js',
       'apps/hyatt/products.js',
       'apps/hyatt/calculations.js',
       'apps/hyatt/setup.js',
@@ -47,6 +49,18 @@ function stripModules(source, filename) {
     .replace(/^export\s*\{[^}]*\};?\s*$/gm, '')
     .trim()
     .concat(`\n\n// end ${filename}`);
+}
+
+const vendorAssets = [
+  ['vendor/pdfjs/pdf-5.6.205.min.mjs', 'dist/vendor/pdf-5.6.205.min.mjs'],
+  ['vendor/pdfjs/pdf.worker-5.6.205.min.mjs', 'dist/vendor/pdf.worker-5.6.205.min.mjs'],
+  ['vendor/pdfjs/LICENSE', 'dist/vendor/pdfjs-LICENSE']
+];
+for (const [source, destination] of vendorAssets) {
+  const output = resolve(root, destination);
+  await mkdir(dirname(output), { recursive: true });
+  await copyFile(resolve(root, source), output);
+  console.log(`Copied ${output}`);
 }
 
 for (const app of apps) {
