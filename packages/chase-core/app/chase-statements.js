@@ -267,23 +267,70 @@ export async function parseChaseStatementPdf(bytes, account, fallbackStatementDa
   }
 }
 
-async function fetchStatementPdf(documentId, signal) {
-  const url = new URL('/svc/rr/documents/secure/idal/v5/pdfdoc/star/list', 'https://secure.chase.com');
-  url.searchParams.set('docKey', documentId);
-  url.searchParams.set('download', 'false');
-  url.searchParams.set('adaVersion', 'false');
-  url.searchParams.set('fromOrigin', location.origin);
-  const pageFetch = typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function'
-    ? unsafeWindow.fetch.bind(unsafeWindow)
-    : fetch.bind(globalThis);
-  const response = await pageFetch(url.href, { credentials: 'include', signal });
-  if (!response.ok) {
-    const error = new Error(`Chase returned HTTP ${response.status} for this statement.`);
-    error.status = response.status;
-    error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-    throw error;
+function secureChaseOrigin(value) {
+  if (!String(value ?? '').trim()) return '';
+  try {
+    const url = new URL(String(value ?? ''), 'https://secure.chase.com/');
+    return url.protocol === 'https:' && /^secure(?:[0-9a-z-]+)?\.chase\.com$/i.test(url.hostname)
+      ? url.origin
+      : '';
+  } catch {
+    return '';
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+}
+
+export function statementRequestOriginCandidates(context = {}) {
+  const pageOrigin = secureChaseOrigin(context.pageOrigin
+    ?? (typeof location !== 'undefined' ? location.origin : ''));
+  const sources = context.sources ?? (() => {
+    const entries = typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function'
+      ? performance.getEntriesByType('resource').map((entry) => entry.name)
+      : [];
+    const elementUrls = typeof document !== 'undefined'
+      ? [...document.querySelectorAll('iframe[src],script[src],link[href]')]
+        .map((element) => element.src || element.href)
+      : [];
+    return [
+      typeof location !== 'undefined' ? location.href : '',
+      typeof document !== 'undefined' ? document.referrer : '',
+      ...entries,
+      ...elementUrls
+    ];
+  })();
+  const explicit = new Set();
+  const detected = new Set();
+  for (const source of sources) {
+    try {
+      const url = new URL(String(source ?? ''), pageOrigin || 'https://secure.chase.com/');
+      const nestedOrigin = secureChaseOrigin(url.searchParams.get('fromOrigin'));
+      if (nestedOrigin) explicit.add(nestedOrigin);
+      const origin = secureChaseOrigin(url.origin);
+      if (origin) detected.add(origin);
+    } catch {
+      // Ignore unrelated or malformed page resources.
+    }
+  }
+  if (pageOrigin) detected.add(pageOrigin);
+  const canonical = 'https://secure.chase.com';
+  const nonCanonical = [...detected].filter((origin) => origin !== canonical);
+  return [...new Set([
+    ...explicit,
+    ...(pageOrigin && pageOrigin !== canonical ? [pageOrigin] : []),
+    ...nonCanonical,
+    ...(pageOrigin === canonical ? [pageOrigin] : []),
+    canonical
+  ])];
+}
+
+function statementHttpError(status) {
+  const error = new Error(`Chase returned HTTP ${status} for this statement.`);
+  error.status = status;
+  error.retryable = status === 408 || status === 429 || status >= 500;
+  return error;
+}
+
+function validateStatementPdfBytes(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value ?? 0);
   const signature = String.fromCharCode(...bytes.slice(0, 4));
   if (signature !== '%PDF') {
     const error = new Error('Chase did not return a PDF. The session may have expired.');
@@ -291,6 +338,97 @@ async function fetchStatementPdf(documentId, signal) {
     throw error;
   }
   return bytes;
+}
+
+function requestStatementPdfWithTampermonkey(url, signal) {
+  assertNotCancelled(signal);
+  return new Promise((resolve, reject) => {
+    let request;
+    let settled = false;
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    };
+    function onAbort() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      request?.abort?.();
+      reject(new DOMException('Statement backfill cancelled.', 'AbortError'));
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      request = GM.xmlHttpRequest({
+        method: 'GET',
+        url: url.href,
+        responseType: 'arraybuffer',
+        anonymous: false,
+        headers: { Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8' },
+        onload: (response) => {
+          if (response.status < 200 || response.status >= 300) {
+            finish(reject, statementHttpError(response.status));
+            return;
+          }
+          try {
+            finish(resolve, validateStatementPdfBytes(response.response));
+          } catch (error) {
+            finish(reject, error);
+          }
+        },
+        onerror: () => {
+          const error = new Error('Chase statement request failed at the browser network layer.');
+          error.name = 'NetworkError';
+          finish(reject, error);
+        },
+        ontimeout: () => {
+          const error = new Error('Chase statement request timed out.');
+          error.name = 'TimeoutError';
+          finish(reject, error);
+        },
+        onabort: onAbort
+      });
+    } catch (error) {
+      finish(reject, error);
+    }
+  });
+}
+
+async function fetchStatementPdfForOrigin(documentId, signal, fromOrigin) {
+  const url = new URL('/svc/rr/documents/secure/idal/v5/pdfdoc/star/list', 'https://secure.chase.com');
+  url.searchParams.set('docKey', documentId);
+  url.searchParams.set('download', 'false');
+  url.searchParams.set('adaVersion', 'false');
+  url.searchParams.set('fromOrigin', fromOrigin);
+  if (typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function') {
+    return requestStatementPdfWithTampermonkey(url, signal);
+  }
+  const pageFetch = typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function'
+    ? unsafeWindow.fetch.bind(unsafeWindow)
+    : fetch.bind(globalThis);
+  const response = await pageFetch(url.href, { credentials: 'include', signal });
+  if (!response.ok) throw statementHttpError(response.status);
+  return validateStatementPdfBytes(await response.arrayBuffer());
+}
+
+async function fetchStatementPdfAcrossOrigins(documentId, signal) {
+  const origins = statementRequestOriginCandidates();
+  let lastError = null;
+  for (let index = 0; index < origins.length; index += 1) {
+    try {
+      return await fetchStatementPdfForOrigin(documentId, signal, origins[index]);
+    } catch (error) {
+      lastError = error;
+      if (![401, 403].includes(error?.status) || index === origins.length - 1) break;
+    }
+  }
+  if (lastError) {
+    lastError.attemptedOrigins = origins;
+    throw lastError;
+  }
+  throw new Error('Chase did not provide a usable statement request origin.');
 }
 
 export function isRetryableStatementFetchError(error) {
@@ -303,7 +441,7 @@ async function fetchStatementPdfWithRetry(documentId, options = {}) {
   for (let attempt = 0; ; attempt += 1) {
     assertNotCancelled(signal);
     try {
-      return await fetchStatementPdf(documentId, signal);
+      return await fetchStatementPdfAcrossOrigins(documentId, signal);
     } catch (error) {
       const baseDelay = PDF_RETRY_DELAYS[attempt];
       if (baseDelay == null || !isRetryableStatementFetchError(error)) throw error;
@@ -425,6 +563,14 @@ export async function collectChaseStatementBackfill(options) {
         imported.add(result.statementDate);
         await onResult(result, { completed: index + 1, total: wanted.length });
       } catch (error) {
+        if ([401, 403].includes(error?.status)) {
+          const checked = (error.attemptedOrigins ?? []).map((origin) => {
+            try { return new URL(origin).hostname; } catch { return origin; }
+          }).filter(Boolean).join(', ');
+          throw new Error(
+            `Chase rejected the statement request (HTTP ${error.status}). The scan stopped after the first authorization failure instead of requesting the remaining PDFs. Reload Chase, sign in again if prompted, and retry.${checked ? ` Document origins checked: ${checked}.` : ''}`
+          );
+        }
         const failure = { statementDate: displayDate, message: error?.message || String(error) };
         failures.push(failure);
         await onFailure(failure, { completed: index + 1, total: wanted.length });

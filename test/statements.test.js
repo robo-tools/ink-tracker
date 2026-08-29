@@ -9,6 +9,7 @@ import {
   mergeStatementCoverage,
   selectedStatementYear,
   statementAccountButton,
+  statementRequestOriginCandidates,
   statementYearOptions
 } from '../packages/chase-core/app/chase-statements.js';
 
@@ -160,6 +161,18 @@ test('statement PDF retries are limited to transient failures', () => {
   assert.equal(isRetryableStatementFetchError({ name: 'NetworkError' }), true);
   assert.equal(isRetryableStatementFetchError({ status: 403, retryable: false, name: 'Error' }), false);
   assert.equal(isRetryableStatementFetchError({ name: 'AbortError' }), false);
+});
+
+test('statement requests prefer Chase\'s generated shard origin over the canonical dashboard host', () => {
+  assert.deepEqual(statementRequestOriginCandidates({
+    pageOrigin: 'https://secure.chase.com',
+    sources: [
+      'https://secure.chase.com/web/auth/dashboard',
+      'https://secure.chase.com/svc/rr/documents/secure/idal/v5/pdfdoc/star/list?docKey=test&fromOrigin=https%3A%2F%2Fsecure27ea.chase.com',
+      'https://secure27ea.chase.com/web/auth/dashboard/app.js',
+      'https://static.chasecdn.com/unrelated.js'
+    ]
+  }), ['https://secure27ea.chase.com', 'https://secure.chase.com']);
 });
 
 test('statement coverage only becomes complete with continuous start-to-recent periods', () => {
