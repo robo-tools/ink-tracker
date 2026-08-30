@@ -1,241 +1,18 @@
 import { parseChaseStatementPages, pdfTextItemsToLines } from '../lib/statements.js';
-import { normalizeLast4 } from '../lib/normalize.js';
-import { chasePageFetch, chaseRequestContext } from './capture.js';
 
-const PDF_RESOURCE = 'CHASE_TRACKER_PDFJS';
-const PDF_WORKER_RESOURCE = 'CHASE_TRACKER_PDFJS_WORKER';
-const STATEMENTS_ROUTE = '#/dashboard/documents/myDocs/index;mode=documents';
-const YEAR_SETTLE_DELAY = Object.freeze({ min: 1_000, max: 1_500 });
-const PDF_REQUEST_DELAY = Object.freeze({ min: 600, max: 900 });
-const PDF_RETRY_DELAYS = Object.freeze([2_000, 5_000]);
-const DOCUMENT_ACCESS_PATH = '/svc/rr/documents/secure/idal/v2/dockey/list';
-const DEFAULT_PDF_PATH = '/svc/rr/documents/secure/idal/v5/pdfdoc/star/list';
 let pdfJsPromise = null;
-
-function waitForStatementUi(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function randomDelay({ min, max }) {
-  return Math.round(min + (Math.random() * (max - min)));
-}
-
-function waitWithCancellation(milliseconds, signal) {
-  assertNotCancelled(signal);
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, milliseconds);
-    function onAbort() {
-      clearTimeout(timer);
-      reject(new DOMException('Statement backfill cancelled.', 'AbortError'));
-    }
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-async function waitFor(predicate, message, timeout = 20_000) {
-  const started = Date.now();
-  while (Date.now() - started < timeout) {
-    const value = predicate();
-    if (value) return value;
-    await waitForStatementUi(200);
-  }
-  throw new Error(message);
-}
-
-function assertNotCancelled(signal) {
-  if (signal?.aborted) throw new DOMException('Statement backfill cancelled.', 'AbortError');
-}
-
-function dashboardPath() {
-  return `${location.pathname}${location.search}`;
-}
-
-function statementRoute() {
-  return STATEMENTS_ROUTE;
-}
-
-export function statementYearOptions(root = document) {
-  const options = [...root.querySelectorAll([
-    '#ul-list-container-filterstyledselect-0 a.option',
-    '#ul-list-container-filterstyledselect-0 [role="option"]'
-  ].join(','))];
-  return [...new Set(options)].map((option) => ({
-    option,
-    year: Number(option.querySelector('.primary')?.textContent?.trim() || option.textContent?.trim())
-  })).filter((item) => Number.isInteger(item.year));
-}
-
-export function selectedStatementYear(root = document) {
-  const control = root.querySelector('#header-filterstyledselect-0');
-  const controlText = String(control?.value ?? control?.getAttribute?.('value') ?? control?.textContent ?? control?.getAttribute?.('aria-label') ?? '');
-  const controlYear = Number(controlText.match(/\b(20\d{2})\b/)?.[1]);
-  if (Number.isInteger(controlYear)) return controlYear;
-  return statementYearOptions(root).find((item) => (
-    item.option.classList?.contains('active') || item.option.getAttribute?.('aria-selected') === 'true'
-  ))?.year ?? null;
-}
-
-function compactStatementDate(value) {
-  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
-  let match = text.match(/\b(20\d{2})(\d{2})(\d{2})\b/);
-  if (match) return `${match[1]}${match[2]}${match[3]}`;
-  match = text.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
-  if (match) return `${match[1]}${match[2].padStart(2, '0')}${match[3].padStart(2, '0')}`;
-  match = text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/);
-  if (match) {
-    const year = match[3].length === 2 ? `20${match[3]}` : match[3];
-    return `${year}${match[1].padStart(2, '0')}${match[2].padStart(2, '0')}`;
-  }
-  const months = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
-  match = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),\s*(20\d{2})\b/i);
-  return match ? `${match[3]}${months[match[1].slice(0, 3).toLowerCase()]}${match[2].padStart(2, '0')}` : '';
-}
-
-function statementDateForAnchor(anchor) {
-  const direct = compactStatementDate(anchor.dataset?.date);
-  if (direct) return direct;
-  const row = anchor.closest?.('tr,[id^="accountsTable-"][id*="-row"]');
-  const dateCell = row?.querySelector?.('[id$="-cell0"],td:first-child');
-  return compactStatementDate(dateCell?.textContent ?? row?.textContent ?? anchor.textContent);
-}
-
-function statementAccountLabel(root, index) {
-  return root.querySelector(`#header-documentsAccordion-${index}`)?.textContent
-    || root.querySelector(`#button-documentsAccordion-${index}`)?.textContent
-    || '';
-}
-
-export function extractStatementDocuments(root = document, wantedLast4 = '') {
-  const documents = new Map();
-  for (const anchor of root.querySelectorAll('a[data-documentid]')) {
-    if (!/requestThisDocumentAnchor-(?:pdf|download)$/i.test(anchor.id ?? '')) continue;
-    const match = anchor.id.match(/accountsTable-(\d+)-/);
-    const heading = match ? statementAccountLabel(root, match[1]) : '';
-    const last4 = normalizeLast4(heading);
-    if (wantedLast4 && last4 !== wantedLast4) continue;
-    const documentId = String(anchor.dataset.documentid ?? '').trim();
-    const statementDate = statementDateForAnchor(anchor);
-    if (!documentId || !/^\d{8}$/.test(statementDate)) continue;
-    documents.set(`${last4}|${statementDate}`, {
-      documentId,
-      statementDate,
-      last4,
-      accountDocumentId: String(anchor.dataset.accountid ?? ''),
-      accountLabel: String(heading ?? '').replace(/\s+/g, ' ').trim()
-    });
-  }
-  return [...documents.values()].sort((left, right) => left.statementDate.localeCompare(right.statementDate));
-}
-
-export function statementAccountButton(root = document, wantedLast4 = '') {
-  return [...root.querySelectorAll('button[id^="button-documentsAccordion-"]')]
-    .find((button) => normalizeLast4(button.textContent) === wantedLast4) ?? null;
-}
-
-export function elementIsVisible(element) {
-  if (!element) return false;
-  for (let current = element; current; current = current.parentElement) {
-    if (current.hidden || current.classList?.contains('hide')) return false;
-    if (typeof getComputedStyle === 'function') {
-      const style = getComputedStyle(current);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-    }
-  }
-  return true;
-}
-
-export function chaseStatementErrorMessage(root = document) {
-  const pattern = /site isn['’]t working|having trouble|unable to (?:complete|load)|please try again/i;
-  const candidates = root.querySelectorAll([
-    '#serviceErrorModal',
-    '#globalErrorContainer',
-    '[role="dialog"]'
-  ].join(','));
-  for (const element of candidates) {
-    const text = String(element.textContent ?? '').replace(/\s+/g, ' ').trim();
-    if (text && pattern.test(text) && elementIsVisible(element)) return text;
-  }
-  return '';
-}
-
-function assertNoChaseStatementError() {
-  const message = chaseStatementErrorMessage(document);
-  if (message) {
-    throw new Error('Chase reported that Statements & Documents is temporarily unavailable. Close Chase’s error message, refresh the page, and retry the statement scan.');
-  }
-}
-
-function statementUiIsLoading(root = document) {
-  return [...root.querySelectorAll('#content-spinner-overlay,[id^="spinner-payments-"]')]
-    .some(elementIsVisible);
-}
-
-function statementPanelIsEmpty(block) {
-  const text = String(block?.textContent ?? '').replace(/\s+/g, ' ').trim();
-  return /(?:no|don['’]t have any) (?:statements|documents)|nothing to (?:display|show)/i.test(text);
-}
-
-async function expandStatementAccount(wantedLast4, year, signal) {
-  assertNotCancelled(signal);
-  assertNoChaseStatementError();
-  let button = await waitFor(
-    () => statementAccountButton(document, wantedLast4),
-    `Chase did not list the card ending …${wantedLast4} on Statements & Documents.`
-  );
-  if (button.getAttribute('aria-expanded') !== 'true') button.click();
-  await waitFor(() => {
-    assertNotCancelled(signal);
-    assertNoChaseStatementError();
-    button = statementAccountButton(document, wantedLast4);
-    if (!button) return false;
-    const blockId = button.getAttribute('aria-controls');
-    const block = blockId ? document.getElementById(blockId) : null;
-    if (!block) return false;
-    const documents = extractStatementDocuments(document, wantedLast4);
-    if (documents.length) return documents.every((item) => item.statementDate.startsWith(String(year)));
-    if (button.getAttribute('aria-expanded') !== 'true') return false;
-    return !statementUiIsLoading(block) && statementPanelIsEmpty(block);
-  }, `Chase did not finish loading statements for card …${wantedLast4}.`, 30_000);
-}
-
-async function selectStatementYear(year, signal) {
-  assertNotCancelled(signal);
-  assertNoChaseStatementError();
-  let item = statementYearOptions().find((candidate) => candidate.year === year);
-  if (!item) return false;
-  if (selectedStatementYear() !== year) {
-    const control = document.querySelector('#header-filterstyledselect-0');
-    if (control?.getAttribute('aria-expanded') !== 'true') control?.click();
-    item = statementYearOptions().find((candidate) => candidate.year === year) ?? item;
-    item.option.click();
-  }
-  await waitFor(() => {
-    assertNotCancelled(signal);
-    assertNoChaseStatementError();
-    if (selectedStatementYear() !== year) return false;
-    if (statementUiIsLoading()) return false;
-    const documents = extractStatementDocuments(document);
-    return !documents.length || documents.every((item) => item.statementDate.startsWith(String(year)));
-  }, `Chase did not finish loading ${year} statements.`);
-  await waitWithCancellation(randomDelay(YEAR_SETTLE_DELAY), signal);
-  assertNoChaseStatementError();
-  return true;
-}
 
 async function loadPdfJs() {
   if (pdfJsPromise) return pdfJsPromise;
   pdfJsPromise = (async () => {
     if (typeof GM === 'undefined' || typeof GM.getResourceText !== 'function') {
-      throw new Error('Tampermonkey did not provide the bundled statement parser. Reinstall or update the userscript.');
+      throw new Error('Tampermonkey PDF resources are unavailable. Reinstall the userscript and try again.');
     }
     const [moduleSource, workerSource] = await Promise.all([
-      GM.getResourceText(PDF_RESOURCE),
-      GM.getResourceText(PDF_WORKER_RESOURCE)
+      GM.getResourceText('CHASE_TRACKER_PDFJS'),
+      GM.getResourceText('CHASE_TRACKER_PDFJS_WORKER')
     ]);
-    if (!moduleSource || !workerSource) throw new Error('The bundled statement parser resources are unavailable.');
+    if (!moduleSource || !workerSource) throw new Error('The bundled PDF parser could not be loaded.');
     const moduleUrl = URL.createObjectURL(new Blob([moduleSource], { type: 'text/javascript' }));
     const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
     try {
@@ -270,291 +47,41 @@ export async function parseChaseStatementPdf(bytes, account, fallbackStatementDa
   }
 }
 
-function secureChaseOrigin(value) {
-  if (!String(value ?? '').trim()) return '';
-  try {
-    const url = new URL(String(value ?? ''), 'https://secure.chase.com/');
-    return url.protocol === 'https:' && /^secure(?:[0-9a-z-]+)?\.chase\.com$/i.test(url.hostname)
-      ? url.origin
-      : '';
-  } catch {
-    return '';
-  }
-}
-
-export function statementRequestOriginCandidates(context = {}) {
-  const pageOrigin = secureChaseOrigin(context.pageOrigin
-    ?? (typeof location !== 'undefined' ? location.origin : ''));
-  const sources = context.sources ?? (() => {
-    const entries = typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function'
-      ? performance.getEntriesByType('resource').map((entry) => entry.name)
-      : [];
-    const elementUrls = typeof document !== 'undefined'
-      ? [...document.querySelectorAll('iframe[src],script[src],link[href]')]
-        .map((element) => element.src || element.href)
-      : [];
-    return [
-      typeof location !== 'undefined' ? location.href : '',
-      typeof document !== 'undefined' ? document.referrer : '',
-      ...entries,
-      ...elementUrls
-    ];
-  })();
-  const explicit = new Set();
-  const detected = new Set();
-  for (const source of sources) {
-    try {
-      const url = new URL(String(source ?? ''), pageOrigin || 'https://secure.chase.com/');
-      const nestedOrigin = secureChaseOrigin(url.searchParams.get('fromOrigin'));
-      if (nestedOrigin) explicit.add(nestedOrigin);
-      const origin = secureChaseOrigin(url.origin);
-      if (origin) detected.add(origin);
-    } catch {
-      // Ignore unrelated or malformed page resources.
-    }
-  }
-  if (pageOrigin) detected.add(pageOrigin);
-  const canonical = 'https://secure.chase.com';
-  const nonCanonical = [...detected].filter((origin) => origin !== canonical);
-  return [...new Set([
-    ...explicit,
-    ...(pageOrigin && pageOrigin !== canonical ? [pageOrigin] : []),
-    ...nonCanonical,
-    ...(pageOrigin === canonical ? [pageOrigin] : []),
-    canonical
-  ])];
-}
-
-function statementHttpError(status) {
-  const error = new Error(`Chase returned HTTP ${status} for this statement.`);
-  error.status = status;
-  error.retryable = status === 408 || status === 429 || status >= 500;
-  return error;
-}
-
-function statementStageHttpError(status, stage) {
-  const error = statementHttpError(status);
-  error.stage = stage;
-  error.authorization = stage === 'authorization';
-  error.fatal = status === 401 || status === 403;
-  error.message = stage === 'authorization'
-    ? `Chase returned HTTP ${status} while authorizing this statement.`
-    : `Chase returned HTTP ${status} while downloading the authorized statement PDF.`;
-  return error;
-}
-
-function statementStageError(message, stage, status = 0) {
-  const error = status ? statementHttpError(status) : new Error(message);
-  error.message = message;
-  error.stage = stage;
-  error.authorization = stage === 'authorization';
-  error.fatal = true;
-  return error;
-}
-
-function validateStatementPdfBytes(value) {
-  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value ?? 0);
-  const signature = String.fromCharCode(...bytes.slice(0, 4));
-  if (signature !== '%PDF') {
-    throw statementStageError(
-      'Chase returned a page instead of the authorized statement PDF. The session may have expired.',
-      'pdf'
-    );
-  }
-  return bytes;
-}
-
-function pageFetch() {
-  return chasePageFetch() ?? (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
-}
-
-function statementAuthorizationError(message, status = 401) {
-  const error = statementHttpError(status);
-  error.message = message;
-  error.authorization = true;
-  error.stage = 'authorization';
-  error.fatal = true;
-  return error;
-}
-
-export function nextClientRequestId(previous = '', generatedId = '') {
-  const generated = generatedId || globalThis.crypto?.randomUUID?.() || '';
-  if (!generated) return previous;
-  const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  if (uuidPattern.test(previous)) return previous.replace(uuidPattern, generated);
-  const compactPattern = /[0-9a-f]{32}/i;
-  if (compactPattern.test(previous)) return previous.replace(compactPattern, generated.replaceAll('-', ''));
-  return generated;
-}
-
-export function statementAccessBody(item, dateFilterType = '') {
-  const body = new URLSearchParams();
-  body.set('accountFilter', item.accountDocumentId);
-  if (dateFilterType) body.set('dateFilter.idalDateFilterType', dateFilterType);
-  body.set('documentId', item.documentId);
-  return body;
-}
-
-function setRequestHeader(headers, name, value) {
-  for (const key of Object.keys(headers)) {
-    if (key.toLowerCase() === name.toLowerCase()) delete headers[key];
-  }
-  if (String(value ?? '').trim()) headers[name] = String(value).trim();
-}
-
-export function statementAccessRequest(item, auth, context = {}) {
-  const requestId = nextClientRequestId(auth?.clientRequestId, context.generatedClientRequestId);
-  const headers = {};
-  setRequestHeader(headers, 'Accept', '*/*');
-  setRequestHeader(headers, 'Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
-  setRequestHeader(headers, 'X-Requested-With', auth?.requestedWith);
-  setRequestHeader(headers, 'X-Jpmc-Channel', auth?.channel);
-  setRequestHeader(headers, 'X-Jpmc-Client-Request-Id', requestId);
-  setRequestHeader(headers, 'X-Jpmc-Csrf-Token', auth?.csrfToken);
-  const requestOrigin = secureChaseOrigin(auth?.requestOrigin) || 'https://secure.chase.com';
-  return {
-    url: new URL(DOCUMENT_ACCESS_PATH, requestOrigin).href,
-    options: {
-      method: 'POST',
-      credentials: 'include',
-      signal: context.signal,
-      headers,
-      body: statementAccessBody(item, auth?.dateFilterType).toString()
-    }
-  };
-}
-
-export function statementPdfRequest(url, signal) {
-  return {
-    url: url.href ?? String(url),
-    options: {
-      credentials: 'include',
-      signal,
-      headers: { Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8' }
-    }
-  };
-}
-
-export function statementPdfUrlFromAccess(payload, context = {}) {
-  const code = String(payload?.code ?? 'SUCCESS').toUpperCase();
-  if (code !== 'SUCCESS') throw new Error(`Chase could not authorize this statement (${code}).`);
-  const docKey = String(payload?.docKey ?? '').trim();
-  if (!docKey) throw new Error('Chase did not provide an authorized document key.');
-  const rawUri = String(payload?.docURI ?? payload?.docUri ?? DEFAULT_PDF_PATH).trim();
-  let url;
-  try {
-    url = new URL(rawUri || DEFAULT_PDF_PATH, 'https://secure.chase.com');
-  } catch {
-    throw new Error('Chase returned an invalid statement document address.');
-  }
-  if (!secureChaseOrigin(url.origin) || !/^\/svc\/rr\/documents\/secure\/idal\//i.test(url.pathname)) {
-    throw new Error('Chase returned an unexpected statement document address.');
-  }
-  if (!url.searchParams.get('docKey')) url.searchParams.set('docKey', docKey);
-  if (!url.searchParams.get('download')) url.searchParams.set('download', 'false');
-  if (!url.searchParams.get('adaVersion')) url.searchParams.set('adaVersion', 'false');
-  const csrfToken = String(payload?.csrfToken ?? payload?.csrftoken ?? '').trim();
-  if (csrfToken && ![...url.searchParams.keys()].some((key) => key.toLowerCase() === 'csrftoken')) {
-    url.searchParams.set('csrfToken', csrfToken);
-  }
-  const fromOrigin = secureChaseOrigin(context.fromOrigin);
-  if (fromOrigin && !url.searchParams.get('fromOrigin')) url.searchParams.set('fromOrigin', fromOrigin);
-  return url;
-}
-
-export async function authorizeStatementDocument(item, signal, context = {}) {
-  const auth = context.auth ?? chaseRequestContext();
-  if (!auth?.csrfToken) {
-    throw statementAuthorizationError(
-      'Chase’s current document authorization token was not available. Reload Chase, then retry the statement scan.'
-    );
-  }
-  if (!item.accountDocumentId) {
-    throw new Error('Chase did not expose the selected card’s statement account identifier.');
-  }
-  if (!auth.clientRequestId) {
-    throw statementAuthorizationError(
-      'Chase’s current document request context was incomplete. Reload Chase, then retry the statement scan.'
-    );
-  }
-  if (!auth.channel || !auth.dateFilterType) {
-    throw statementAuthorizationError(
-      'Chase’s document request template was incomplete. Open one statement from an older year normally, close its PDF viewer, then retry the statement scan.'
-    );
-  }
-  const statementYear = Number(String(item.statementDate ?? '').slice(0, 4));
-  const currentYear = Number(context.currentYear ?? new Date().getFullYear());
-  if (auth.dateFilterType === 'CURRENT_YEAR' && statementYear && statementYear !== currentYear) {
-    throw statementAuthorizationError(
-      'Chase only provided a current-year document template. Open one statement from an older year normally, close its PDF viewer, then retry the statement scan.'
-    );
-  }
-  const request = statementAccessRequest(item, auth, { signal });
-  const fetchPage = context.fetchPage ?? pageFetch();
-  if (!fetchPage) throw statementAuthorizationError('Chase’s page request function was unavailable. Reload Chase, then retry.');
-  const response = await fetchPage(request.url, request.options);
-  if (!response.ok) throw statementStageHttpError(response.status, 'authorization');
-  let payload;
-  try {
-    payload = await response.json();
-  } catch {
-    throw statementStageError('Chase did not return a valid statement authorization response.', 'authorization');
-  }
-  const fromOrigin = (context.originCandidates ?? statementRequestOriginCandidates)()[0] || 'https://secure.chase.com';
-  try {
-    return statementPdfUrlFromAccess(payload, { fromOrigin });
-  } catch (error) {
-    throw statementStageError(error?.message || 'Chase could not authorize this statement.', 'authorization');
-  }
-}
-
-export async function fetchAuthorizedStatementPdf(item, signal, context = {}) {
-  const url = await authorizeStatementDocument(item, signal, context);
-  const request = statementPdfRequest(url, signal);
-  const fetchPage = context.fetchPage ?? pageFetch();
-  if (!fetchPage) throw statementStageError('Chase’s page request function was unavailable.', 'pdf');
-  const response = await fetchPage(request.url, request.options);
-  if (!response.ok) throw statementStageHttpError(response.status, 'pdf');
-  return validateStatementPdfBytes(await response.arrayBuffer());
-}
-
-export function isRetryableStatementFetchError(error) {
-  if (!error || error.name === 'AbortError') return false;
-  return error.retryable === true || ['TypeError', 'NetworkError', 'TimeoutError'].includes(error.name);
-}
-
-async function fetchStatementPdfWithRetry(item, options = {}) {
-  const { signal, onRetry = () => {} } = options;
-  for (let attempt = 0; ; attempt += 1) {
-    assertNotCancelled(signal);
-    try {
-      return await fetchAuthorizedStatementPdf(item, signal);
-    } catch (error) {
-      const baseDelay = PDF_RETRY_DELAYS[attempt];
-      if (baseDelay == null || !isRetryableStatementFetchError(error)) throw error;
-      const delay = Math.round(baseDelay * (0.9 + (Math.random() * 0.2)));
-      onRetry({ attempt: attempt + 2, delay, error });
-      await waitWithCancellation(delay, signal);
-    }
-  }
-}
-
 function daysBetween(left, right) {
   const start = new Date(`${left}T00:00:00Z`);
   const end = new Date(`${right}T00:00:00Z`);
   return Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf()) ? Infinity : Math.round((end - start) / 86_400_000);
 }
 
+function statementsConflict(existing, result) {
+  if (!existing) return false;
+  if (existing.openingDate && result.openingDate && existing.openingDate !== result.openingDate) return true;
+  if (existing.closingDate && result.closingDate && existing.closingDate !== result.closingDate) return true;
+  if (Number.isFinite(existing.purchaseTotalCents)
+    && Number.isFinite(result.purchaseTotalCents)
+    && existing.purchaseTotalCents !== result.purchaseTotalCents) return true;
+  return Boolean(existing.statementAccountLast4
+    && result.statementAccountLast4
+    && existing.statementAccountLast4 !== result.statementAccountLast4);
+}
+
 export function mergeStatementCoverage(existing = {}, results = [], context = {}) {
   const periodMap = new Map((existing.periods ?? []).map((period) => [period.statementDate, period]));
-  for (const result of results) periodMap.set(result.statementDate, {
-    parserVersion: result.parserVersion,
-    openingDate: result.openingDate,
-    closingDate: result.closingDate,
-    statementDate: result.statementDate,
-    purchaseTotalCents: result.purchaseTotalCents,
-    transactionCount: result.transactionCount
-  });
+  for (const result of results) {
+    const previous = periodMap.get(result.statementDate);
+    if (statementsConflict(previous, result)) {
+      throw new Error(`A different statement is already saved for ${result.statementDate}.`);
+    }
+    periodMap.set(result.statementDate, {
+      parserVersion: result.parserVersion,
+      openingDate: result.openingDate,
+      closingDate: result.closingDate,
+      statementDate: result.statementDate,
+      statementAccountLast4: result.statementAccountLast4 ?? previous?.statementAccountLast4 ?? null,
+      purchaseTotalCents: result.purchaseTotalCents,
+      transactionCount: result.transactionCount
+    });
+  }
   const periods = [...periodMap.values()].filter((period) => period.openingDate && period.closingDate)
     .sort((left, right) => left.openingDate.localeCompare(right.openingDate));
   const gaps = [];
@@ -579,93 +106,4 @@ export function mergeStatementCoverage(existing = {}, results = [], context = {}
     complete: startCovered && endCovered && gaps.length === 0,
     updatedAt: new Date().toISOString()
   };
-}
-
-export async function collectChaseStatementBackfill(options) {
-  const {
-    account,
-    benefitStartDate,
-    activityEarliest,
-    importedStatementDates = [],
-    progress = () => {},
-    onResult = async () => {},
-    onFailure = async () => {},
-    signal
-  } = options;
-  if (!account?.last4) throw new Error('The Hyatt card must have a last four before statements can be matched.');
-  if (!benefitStartDate) throw new Error('Enter when the current Hyatt benefits began before starting a statement backfill.');
-  if (!activityEarliest) throw new Error('Refresh or import the recent Chase activity before backfilling older statements.');
-
-  const originalPath = dashboardPath();
-  const originalHash = location.hash;
-  const imported = new Set(importedStatementDates);
-  try {
-    progress('Opening Chase Statements & Documents…');
-    if (!location.hash.includes('/dashboard/documents/myDocs/')) location.hash = statementRoute();
-    await waitFor(() => statementYearOptions().length, 'Chase Statements & Documents did not finish loading.', 30_000);
-
-    const startYear = Number(benefitStartDate.slice(0, 4));
-    const endYear = Number(activityEarliest.slice(0, 4));
-    const years = statementYearOptions().map((item) => item.year)
-      .filter((year) => year >= startYear && year <= endYear)
-      .sort((left, right) => left - right);
-    if (!years.length) throw new Error('No available statement years overlap the missing Hyatt history.');
-
-    const documents = new Map();
-    for (const year of years) {
-      assertNotCancelled(signal);
-      assertNoChaseStatementError();
-      progress(`Finding ${year} statements for …${account.last4}…`);
-      await selectStatementYear(year, signal);
-      await expandStatementAccount(account.last4, year, signal);
-      for (const item of extractStatementDocuments(document, account.last4)) {
-        documents.set(item.statementDate, item);
-      }
-    }
-
-    const wanted = [...documents.values()].filter((item) => {
-      const closingDate = `${item.statementDate.slice(0, 4)}-${item.statementDate.slice(4, 6)}-${item.statementDate.slice(6, 8)}`;
-      return closingDate >= benefitStartDate && !imported.has(closingDate);
-    }).sort((left, right) => left.statementDate.localeCompare(right.statementDate));
-    assertNoChaseStatementError();
-    if (!documents.size) throw new Error(`No statements matched Hyatt card …${account.last4}.`);
-    if (!wanted.length) return { results: [], failures: [], discovered: documents.size };
-
-    const results = [];
-    const failures = [];
-    for (let index = 0; index < wanted.length; index += 1) {
-      assertNotCancelled(signal);
-      const item = wanted[index];
-      const displayDate = `${item.statementDate.slice(0, 4)}-${item.statementDate.slice(4, 6)}-${item.statementDate.slice(6, 8)}`;
-      progress(`Parsing statement ${index + 1} of ${wanted.length} (${displayDate})…`);
-      try {
-        const bytes = await fetchStatementPdfWithRetry(item, {
-          signal,
-          onRetry: ({ attempt, delay }) => progress(
-            `Chase temporarily rejected ${displayDate}; retrying in ${Math.ceil(delay / 1_000)} seconds (attempt ${attempt} of 3)…`
-          )
-        });
-        const result = await parseChaseStatementPdf(bytes, account, item.statementDate);
-        results.push(result);
-        imported.add(result.statementDate);
-        await onResult(result, { completed: index + 1, total: wanted.length });
-      } catch (error) {
-        if ([401, 403].includes(error?.status) || error?.fatal) {
-          const guidance = error.stage === 'pdf'
-            ? 'Chase authorized the statement but blocked the background PDF download. Retry once after reloading Chase; if it repeats, use “Import downloaded PDFs” for those statements.'
-            : 'The scan stopped after the first document-authorization failure instead of requesting the remaining PDFs. Open one statement from an older year normally, close its PDF viewer, and retry; sign in again if Chase prompts you.';
-          throw new Error(`${error?.message || `Chase rejected the statement request (HTTP ${error.status}).`} ${guidance}`);
-        }
-        const failure = { statementDate: displayDate, message: error?.message || String(error) };
-        failures.push(failure);
-        await onFailure(failure, { completed: index + 1, total: wanted.length });
-      }
-      if (index < wanted.length - 1) {
-        await waitWithCancellation(randomDelay(PDF_REQUEST_DELAY), signal);
-      }
-    }
-    return { results, failures, discovered: documents.size };
-  } finally {
-    if (location.pathname + location.search === originalPath && location.hash !== originalHash) location.hash = originalHash;
-  }
 }

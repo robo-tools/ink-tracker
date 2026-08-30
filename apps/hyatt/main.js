@@ -2,10 +2,11 @@ import { extractNormalizedData, normalizeChaseCsv, normalizeLast4 } from '../../
 import { commitFullSync, createStorage, emptyState, mergeState, mergeSupplementalTransactions, repairStateAccountMetadata } from '../../packages/chase-core/app/storage.js';
 import { extractChaseAccounts, extractChaseActivity, syncAllCards } from '../../packages/chase-core/app/chase-dom.js';
 import { installChaseNetworkCapture } from '../../packages/chase-core/app/capture.js';
-import { collectChaseStatementBackfill, mergeStatementCoverage, parseChaseStatementPdf } from '../../packages/chase-core/app/chase-statements.js';
+import { mergeStatementCoverage, parseChaseStatementPdf } from '../../packages/chase-core/app/chase-statements.js';
 import { createHyattTrackerUi } from './ui.js';
 import { identifyHyattProduct, isHyattAccount } from './products.js';
 import { normalizeHyattSetup } from './setup.js';
+import { normalizeStatementLast4Aliases, parseStatementFileWithAliases } from './statement-import.js';
 
 const HYATT_CHASE_OPTIONS = Object.freeze({
   identifyProduct: identifyHyattProduct,
@@ -14,6 +15,7 @@ const HYATT_CHASE_OPTIONS = Object.freeze({
 });
 
 void (async function startHyattTracker() {
+  if (typeof window !== 'undefined' && window.top !== window.self) return;
   const storage = createStorage({ storageKey: 'hyatt-tracker-state-v1', label: 'Hyatt Tracker' });
   const pendingCapture = [];
   let state = null;
@@ -129,56 +131,44 @@ void (async function startHyattTracker() {
       await new Promise((resolve) => setTimeout(resolve, 450));
     },
 
-    async backfillStatements(accountId, benefitStartDate, progress, signal) {
-      const account = state.accounts.find((item) => String(item.id) === String(accountId));
-      if (!account) throw new Error('That Hyatt card is no longer available. Refresh and try again.');
-      if (identifyHyattProduct(account.name)?.type !== 'personal') {
-        throw new Error('The multi-year statement backfill is only needed for the personal Hyatt card.');
-      }
-      const activityEarliest = accountActivityEarliest(account);
-      const existing = mergeStatementCoverage(
-        state.coverage?.[account.id]?.statements ?? {},
-        [],
-        { benefitStartDate, activityEarliest }
-      );
-      await save(mergeState(state, { coverage: { [account.id]: { statements: existing } } }, 'chase-statement'));
-      const importedStatementDates = (existing.periods ?? []).map((period) => period.statementDate).filter(Boolean);
-      let savedCount = 0;
-      const result = await collectChaseStatementBackfill({
-        account,
-        benefitStartDate,
-        activityEarliest,
-        importedStatementDates,
-        progress,
-        signal,
-        onResult: async (statement, itemProgress) => {
-          savedCount += 1;
-          await saveStatementResult(account, statement, benefitStartDate);
-          progress(`Saved statement ${itemProgress.completed} of ${itemProgress.total}; ${savedCount} added this run.`);
-        }
-      });
-      if (result.failures.length) {
-        const first = result.failures[0];
-        throw new Error(`${savedCount} statement${savedCount === 1 ? '' : 's'} saved; ${result.failures.length} could not be verified. First failure (${first.statementDate}): ${first.message} Retry or import that PDF manually.`);
-      }
-      progress(savedCount
-        ? `${savedCount} verified statement${savedCount === 1 ? '' : 's'} added. Completed months were saved locally.`
-        : 'No new statements were needed; all discovered months were already imported.');
-      await new Promise((resolve) => setTimeout(resolve, 650));
-    },
-
     async importStatementPdfs(files, accountId, benefitStartDate, progress) {
       const account = state.accounts.find((item) => String(item.id) === String(accountId));
       if (!account) throw new Error('That Hyatt card is no longer available. Refresh and try again.');
       let savedCount = 0;
       const failures = [];
+      let aliases = normalizeStatementLast4Aliases(
+        state.cardConfig?.[accountId]?.statementLast4Aliases,
+        account.last4
+      );
       for (let index = 0; index < files.length; index += 1) {
         const file = files[index];
         progress(`Verifying PDF ${index + 1} of ${files.length} (${file.name})…`);
         try {
           const compactDate = file.name.match(/(?:^|\D)(20\d{2})[-_]?([01]\d)[-_]?([0-3]\d)(?:\D|$)/);
           const fallbackDate = compactDate ? `${compactDate[1]}${compactDate[2]}${compactDate[3]}` : '';
-          const result = await parseChaseStatementPdf(await file.arrayBuffer(), account, fallbackDate);
+          const parsed = await parseStatementFileWithAliases(file, account, fallbackDate, {
+            aliases,
+            parsePdf: parseChaseStatementPdf,
+            confirmAlias: ({ priorLast4, selectedLast4 }) => confirm(
+              `This Chase PDF uses card ending …${priorLast4}, while the selected current card ends …${selectedLast4}. `
+              + `This commonly happens after a replacement or reissue. Confirm only if …${priorLast4} was an earlier number for this same card account. Remember it for future statement imports?`
+            )
+          });
+          aliases = parsed.aliases;
+          if (parsed.addedAlias) {
+            await save({
+              ...state,
+              cardConfig: {
+                ...(state.cardConfig ?? {}),
+                [accountId]: {
+                  ...(state.cardConfig?.[accountId] ?? {}),
+                  statementLast4Aliases: aliases
+                }
+              }
+            });
+            progress(`Confirmed prior card ending …${parsed.addedAlias}; continuing this batch…`);
+          }
+          const result = parsed.result;
           await saveStatementResult(account, result, benefitStartDate);
           savedCount += 1;
         } catch (error) {

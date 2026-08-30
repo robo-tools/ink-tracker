@@ -89,6 +89,15 @@ test('personal award-date fallback validates dates and remains an estimate confi
   });
 });
 
+test('personal setup preserves confirmed prior statement card endings', () => {
+  const config = normalizeHyattSetup({ ...personal, last4: '1111' }, {
+    historyMode: 'full',
+    benefitStartDate: '2024-01-10',
+    historyConfirmed: true
+  }, { statementLast4Aliases: ['9876', '9876', '1111'] });
+  assert.deepEqual(config.statementLast4Aliases, ['9876']);
+});
+
 test('business setup records the year whose transaction history was confirmed', () => {
   assert.deepEqual(normalizeHyattSetup(business, {
     yearHistoryConfirmed: true

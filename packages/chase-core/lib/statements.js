@@ -27,11 +27,6 @@ function dateFromShort(value) {
   return formatDateOnly(`${year}-${match[1]}-${match[2]}`);
 }
 
-function dateFromDocumentValue(value) {
-  const match = String(value ?? '').match(/^(\d{4})(\d{2})(\d{2})$/);
-  return match ? formatDateOnly(`${match[1]}-${match[2]}-${match[3]}`) : formatDateOnly(value);
-}
-
 function lineSection(line, current) {
   const normalized = line.toUpperCase().replace(/\s*\([^)]*CONTINUED[^)]*\)\s*/g, '').trim();
   if (/^(?:PAYMENTS?(?: AND OTHER CREDITS)?\s*){1,2}$/.test(normalized)) return 'credits';
@@ -62,12 +57,25 @@ export function pdfTextItemsToLines(items, tolerance = 1.25) {
   )).filter(Boolean);
 }
 
-export function parseChaseStatementPages(pages, account, fallbackStatementDate = '') {
+export function parseChaseStatementPages(pages, account, _fallbackStatementDate = '') {
   const lines = (pages ?? []).flat().map(cleanLine).filter(Boolean);
   const accountLine = lines.find((line) => /Account Number:/i.test(line));
   const statementLast4 = normalizeLast4(accountLine);
-  if (account?.last4 && statementLast4 && statementLast4 !== account.last4) {
-    throw new Error('This statement does not match the selected card ending.');
+  if (!statementLast4) {
+    throw new Error('This PDF did not contain a recognizable Chase account ending.');
+  }
+  const selectedLast4 = normalizeLast4(account?.last4);
+  const acceptedLast4s = new Set([
+    selectedLast4,
+    ...(account?.statementLast4Aliases ?? []).map(normalizeLast4)
+  ].filter(Boolean));
+  if (selectedLast4 && statementLast4 && !acceptedLast4s.has(statementLast4)) {
+    const error = new Error('This statement does not match the selected card ending.');
+    error.name = 'StatementCardEndingMismatchError';
+    error.code = 'statement-card-ending-mismatch';
+    error.statementLast4 = statementLast4;
+    error.selectedLast4 = selectedLast4;
+    throw error;
   }
   const cycleLine = lines.find((line) => /Opening\/Closing Date/i.test(line));
   const cycleMatch = cycleLine?.match(/Opening\/Closing Date\s+(\d{2}\/\d{2}\/\d{2,4})\s*[-–]\s*(\d{2}\/\d{2}\/\d{2,4})/i);
@@ -75,8 +83,7 @@ export function parseChaseStatementPages(pages, account, fallbackStatementDate =
   const statementMatch = statementLine?.match(/Statement Date:\s*(\d{2}\/\d{2}\/\d{2,4})/i);
   const openingDate = dateFromShort(cycleMatch?.[1]);
   const closingDate = dateFromShort(cycleMatch?.[2])
-    || dateFromShort(statementMatch?.[1])
-    || dateFromDocumentValue(fallbackStatementDate);
+    || dateFromShort(statementMatch?.[1]);
   if (!closingDate) throw new Error('This PDF did not contain a recognizable Chase statement date.');
 
   const summaryLine = lines.find((line) => /^Purchases\s+\+?\$[\d,]+\.\d{2}$/i.test(line));
@@ -133,6 +140,7 @@ export function parseChaseStatementPages(pages, account, fallbackStatementDate =
     parsedPurchaseCents,
     creditTotalCents: Number.isFinite(creditTotalCents) ? creditTotalCents : null,
     parsedCreditCents,
+    statementAccountLast4: statementLast4 || null,
     transactionCount: transactions.length,
     transactions
   };

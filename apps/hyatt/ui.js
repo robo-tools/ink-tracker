@@ -152,18 +152,29 @@ function setupNarrative(metric) {
   return `The first captured transaction is ${gap} days after the current Hyatt benefits began. Confirm there really were no earlier qualifying purchases, or use a Chase baseline.`;
 }
 
-function statementCoverageSummary(metric) {
+export function statementCoverageSummary(metric, benefitStartDate = '') {
   const coverage = metric.coverage.statements;
+  const activityEarliest = metric.coverage.activity?.earliest ?? coverage?.activityEarliest ?? '';
+  const targetStart = benefitStartDate || coverage?.benefitStartDate || '';
+  const targetRange = targetStart && activityEarliest
+    ? `${formatMonthYear(targetStart)} – ${formatMonthYear(activityEarliest)}`
+    : targetStart
+      ? `starting ${formatMonthYear(targetStart)}`
+      : activityEarliest
+        ? `through ${formatMonthYear(activityEarliest)}`
+        : 'set the Hyatt benefit start date to see the needed range';
   if (!coverage?.statementCount) {
-    return '<span>No older statements imported yet.</span>';
+    return `<span><strong>Needed statement range:</strong> ${escapeHtml(targetRange)} · No older statements imported yet.</span>`;
   }
   const range = coverage.earliest && coverage.latest
     ? `${formatMonthYear(coverage.earliest)} – ${formatMonthYear(coverage.latest)}`
     : 'date range unavailable';
-  const issue = coverage.gaps?.length
-    ? ` · ${coverage.gaps.length} gap${coverage.gaps.length === 1 ? '' : 's'} remaining`
-    : '';
-  return `<span><strong>${coverage.statementCount} verified statement${coverage.statementCount === 1 ? '' : 's'}</strong> · ${escapeHtml(range)}${issue}</span>`;
+  const issues = [];
+  if (targetStart && coverage.earliest && coverage.earliest > targetStart) issues.push('beginning months missing');
+  if (coverage.gaps?.length) issues.push(`${coverage.gaps.length} internal gap${coverage.gaps.length === 1 ? '' : 's'}`);
+  if (activityEarliest && coverage.latest && coverage.latest < activityEarliest) issues.push('ending months missing');
+  const issue = issues.length ? ` · ${issues.join(' · ')}` : '';
+  return `<span><strong>Needed:</strong> ${escapeHtml(targetRange)}<br><strong>${coverage.statementCount} verified statement${coverage.statementCount === 1 ? '' : 's'}</strong> · Imported coverage ${escapeHtml(range)}${issue}</span>`;
 }
 
 function personalSetup(metric, options = {}) {
@@ -172,6 +183,7 @@ function personalSetup(metric, options = {}) {
   const baselineDollars = Number.isFinite(config.baselineProgressCents) ? (config.baselineProgressCents / 100).toFixed(2) : '';
   const benefitStartDate = options.benefitStartDate ?? config.benefitStartDate ?? '';
   const statementCoverage = metric.coverage.statements ?? {};
+  const statementAliases = (config.statementLast4Aliases ?? []).filter(Boolean);
   const activityEarliest = metric.coverage.activity?.earliest ?? statementCoverage.activityEarliest ?? '';
   const statementHistoryComplete = Boolean(
     statementCoverage.earliest
@@ -188,21 +200,19 @@ function personalSetup(metric, options = {}) {
       <label><span>Current Hyatt benefits began</span><small class="field-help">Usually the date you opened this Hyatt card. If you product-changed or converted into it, use the effective change date instead—not the first-purchase or anniversary date.</small><input type="date" name="benefitStartDate" value="${escapeHtml(benefitStartDate)}" required></label>
       <p class="coverage-summary" data-opening-summary data-earliest="${escapeHtml(metric.coverage.earliest ?? '')}">${setupNarrative(metric)}</p>
       <label><span>Initialization method</span><select name="historyMode">
-        <option value="full" ${mode === 'full' ? 'selected' : ''}>Complete transaction history</option>
-        <option value="baseline" ${mode === 'baseline' ? 'selected' : ''}>Exact Chase baseline</option>
+        <option value="full" ${mode === 'full' ? 'selected' : ''}>Full history from downloaded statements</option>
+        <option value="baseline" ${mode === 'baseline' ? 'selected' : ''}>Exact Chase baseline (easiest)</option>
         <option value="estimate" ${mode === 'estimate' ? 'selected' : ''}>Last 2-night award date (estimate)</option>
       </select></label>
       <div class="mode-panel" data-for-mode="full">
         <div class="method-note"><strong>Full history</strong><span>We calculate lifetime qualifying spend modulo $5,000.</span></div>
         <div class="statement-backfill ${statementHistoryComplete ? 'complete' : ''}">
           <div><strong>${statementHistoryComplete ? '✓ Full history verified from Chase statements' : 'Older history from monthly statements'}</strong>
-          <p>Run this after the normal Refresh. Before the first scan, open any statement from an older year once and close its PDF viewer; this lets Chase establish its secure document-request template. The optional scan then selects every needed year, expands this card, and reads the monthly PDFs Chase still provides (normally up to seven years) without opening more PDF viewer windows.</p>
-          <div class="statement-coverage">${statementCoverageSummary(metric)}</div></div>
-          <div class="statement-actions">${options.statementBusy
-            ? '<button type="button" data-action="cancel-statements">Cancel scan</button>'
-            : '<button type="button" class="primary" data-action="backfill-statements">Scan older Chase statements</button><button type="button" data-action="import-statements">Import downloaded PDFs</button>'}</div>
+          <p>Chase only serves these PDFs through its own viewer. Download the monthly statements normally from Chase, then select all of the PDFs together here. They are verified and parsed locally; the tracker never saves the raw PDFs.</p>
+          <div class="statement-coverage">${statementCoverageSummary(metric, benefitStartDate)}${statementAliases.length ? `<br><span><strong>Confirmed prior card ending${statementAliases.length === 1 ? '' : 's'}:</strong> ${statementAliases.map((last4) => `…${escapeHtml(last4)}`).join(', ')}</span>` : ''}</div></div>
+          <div class="statement-actions"><button type="button" class="primary" data-action="import-statements">Import statement PDFs</button><button type="button" data-action="open-statements">Open Chase statements</button></div>
         </div>
-        <label class="check"><input type="checkbox" name="historyConfirmed" ${(config.historyConfirmed || statementHistoryComplete) ? 'checked' : ''} ${statementHistoryComplete ? 'disabled' : ''}><span>${statementHistoryComplete ? 'The statement scan and recent activity form a continuous history from the Hyatt benefit start date.' : 'I confirm there were no qualifying purchases before the oldest captured transaction.'}</span></label>
+        <label class="check"><input type="checkbox" name="historyConfirmed" ${(config.historyConfirmed || statementHistoryComplete) ? 'checked' : ''} ${statementHistoryComplete ? 'disabled' : ''}><span>${statementHistoryComplete ? 'The imported statements and recent activity form a continuous history from the Hyatt benefit start date.' : 'I confirm there were no qualifying purchases before the oldest captured transaction.'}</span></label>
       </div>
       <div class="mode-panel" data-for-mode="baseline">
         <div class="method-note"><strong>Chase baseline</strong><span>Use a Chase secure message to ask how much spend remains before the next two qualifying nights.</span></div>
@@ -237,7 +247,7 @@ function debugView(state, captureStatus) {
     const transactions = (state.transactions ?? []).filter((transaction) => String(transaction.accountId) === String(account.id));
     const statementText = statements.statementCount
       ? `${statements.statementCount} verified statement${statements.statementCount === 1 ? '' : 's'} (${formatMonthYear(statements.earliest)} – ${formatMonthYear(statements.latest)})${statements.complete ? ' · continuous to recent activity' : ''}`
-      : 'No statement backfill';
+      : 'No older statement PDFs imported';
     return `<div><dt>${escapeHtml(displayAccountName(account.name))} …${escapeHtml(account.last4)}</dt><dd>${coverage.complete ? 'List end verified' : 'Unverified'} · ${itemDateRange(transactions)}<br>${escapeHtml(statementText)}</dd></div>`;
   }).join('');
   return `<div class="debug-grid">
@@ -246,7 +256,7 @@ function debugView(state, captureStatus) {
       <div><dt>Activity coverage</dt><dd>${itemDateRange(state.transactions ?? [])}</dd></div><div><dt>Captured payloads</dt><dd>${state.captureStats?.payloads ?? 0}</dd></div>
       <div><dt>Network listener</dt><dd>${captureStatus?.installed ? 'Active' : 'Fallback only'}</dd></div>
     </dl></section>
-    <section><h2>Data controls</h2><p>CSV imports cover recent activity. Personal-card setup can optionally scan older monthly statement PDFs.</p><div class="action-stack">
+    <section><h2>Data controls</h2><p>CSV imports cover recent activity. Personal-card setup can locally import older monthly statement PDFs downloaded from Chase.</p><div class="action-stack">
       <button data-action="import">Import Chase CSV</button><button data-action="export">Export tracker JSON</button><button class="danger" data-action="clear">Clear Hyatt tracker data</button>
     </div></section>
     <section class="wide"><h2>Coverage by card</h2><dl class="coverage-list">${rows || '<div><dt>No cards</dt><dd>None</dd></div>'}</dl></section>
@@ -298,7 +308,7 @@ export function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.8</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.9</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;
@@ -310,7 +320,6 @@ export function createHyattTrackerUi(handlers) {
   let detailFilters = { cardId: 'all', mode: 'eligible' };
   let captureStatus = null;
   let busy = false;
-  let statementBackfillController = null;
   let statementImportContext = null;
   const setupDraftDates = new Map();
   const backdrop = root.querySelector('.backdrop');
@@ -328,8 +337,7 @@ export function createHyattTrackerUi(handlers) {
     root.querySelector('.updated').textContent = `Updated ${formatUpdated(state.updatedAt)}`;
     const setupMetric = setupAccountId ? allMetrics.find((metric) => String(metric.account.id) === String(setupAccountId)) : null;
     root.querySelector('.body').innerHTML = busy ? syncingView() : setupMetric ? setupView(setupMetric, {
-      benefitStartDate: setupDraftDates.get(String(setupMetric.account.id)),
-      statementBusy: Boolean(statementBackfillController)
+      benefitStartDate: setupDraftDates.get(String(setupMetric.account.id))
     })
       : view === 'summary' ? allMetrics.length ? summaryView(allMetrics) : emptySummary()
       : view === 'detail' ? detailView(allMetrics, detailFilters) : debugView(state, captureStatus);
@@ -343,7 +351,7 @@ export function createHyattTrackerUi(handlers) {
     try { await action((message) => showStatus(message)); hideStatus(); return true; }
     catch (error) {
       const cancelled = error?.name === 'AbortError';
-      showStatus(cancelled ? 'Statement scan cancelled. Statements already completed were kept.' : error?.message || String(error), !cancelled);
+      showStatus(cancelled ? 'Operation cancelled. Completed imports were kept.' : error?.message || String(error), !cancelled && !error?.informational);
       return false;
     }
   }
@@ -381,21 +389,13 @@ export function createHyattTrackerUi(handlers) {
       render();
     }
     if (action === 'import') fileInput.click();
-    if (action === 'backfill-statements') {
+    if (action === 'open-statements') {
       const form = root.querySelector('[data-setup-form]');
       const benefitStartDate = form?.elements?.benefitStartDate?.value;
       if (!benefitStartDate) { showStatus('Enter when the current Hyatt benefits began first.', true); return; }
-      if (!confirm('Scan Chase monthly statements for this card? Before the first scan, open any older statement normally and close its PDF viewer. The current tab will then briefly visit Statements & Documents and fetch each needed PDF directly. The scan will not open more PDF viewer windows, and raw PDFs will not be saved.')) return;
-      statementBackfillController = new AbortController();
-      render();
-      await run(
-        (progress) => handlers.backfillStatements(form.dataset.accountId, benefitStartDate, progress, statementBackfillController.signal),
-        'Finding older Chase statements…'
-      );
-      statementBackfillController = null;
-      render();
+      window.open('https://secure.chase.com/web/auth/dashboard#/dashboard/documents/myDocs/index;mode=documents', '_blank', 'noopener,noreferrer');
+      showStatus('Chase Statements & Documents opened. Download the needed monthly PDFs there, then return and choose Import statement PDFs.');
     }
-    if (action === 'cancel-statements') statementBackfillController?.abort();
     if (action === 'import-statements') {
       const form = root.querySelector('[data-setup-form]');
       const benefitStartDate = form?.elements?.benefitStartDate?.value;

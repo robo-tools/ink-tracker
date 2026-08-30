@@ -36,6 +36,7 @@ const apps = [
       'apps/hyatt/products.js',
       'apps/hyatt/calculations.js',
       'apps/hyatt/setup.js',
+      'apps/hyatt/statement-import.js',
       'apps/hyatt/ui.js',
       'apps/hyatt/main.js'
     ]

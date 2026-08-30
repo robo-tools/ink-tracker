@@ -45,13 +45,13 @@ The Hyatt tracker supports the current personal and business World of Hyatt card
 
 The personal card requires one initialization method:
 
-1. **Complete history:** enter the date the current Hyatt benefits began and confirm that no earlier qualifying purchases are missing. The tracker calculates lifetime net spend modulo $5,000. Because Chase’s activity page and CSV export usually reach back only about two years, this method also offers an explicit, optional scan of the monthly statements Chase retains (normally up to seven years).
+1. **Complete history:** enter the date the current Hyatt benefits began and confirm that no earlier qualifying purchases are missing. The tracker calculates lifetime net spend modulo $5,000. Because Chase’s activity page and CSV export usually reach back only about two years, older monthly statement PDFs can be downloaded normally from Chase and batch-imported into the tracker.
 2. **Exact Chase baseline:** enter a date and the amount already accumulated—or the amount remaining—toward the next two nights. A Chase secure message can be used to request this information.
 3. **Last award date:** enter the last known two-night award or threshold date. This remains visibly labeled as an estimate because the threshold-crossing purchase may have left unknown rollover.
 
 The setup screen compares the benefit start date with the oldest captured transaction. A first purchase up to 60 days after opening is treated as a normal setup gap, but the user must still confirm that no earlier purchase is missing before the result is labeled exact.
 
-The older-statement scan is never part of normal **Refresh**. When the user starts it from personal-card setup, the tracker briefly opens Chase’s **Statements & Documents** route in the current tab and discovers only the selected card’s statement document IDs. For every document, it uses Chase’s current in-page request context to ask Chase for a fresh, short-lived authorized PDF address, then reads that PDF in the same signed-in session. Document URLs and authorization data are never saved. The scan paces year changes and PDF requests, adds small timing jitter, and retries transient request failures twice with increasing backoff. It does not click Chase’s viewer links or open PDF windows. Every statement must reconcile exactly to Chase’s own statement purchase total before its normalized transactions are saved. Successful months are saved incrementally, so a cancelled scan can be resumed. Downloaded statement PDFs can also be selected manually as a fallback.
+Chase serves statement PDFs through a navigation-only viewer that cannot be read reliably by a Tampermonkey background request. For full-history setup, the tracker therefore opens Chase’s **Statements & Documents** page and shows the monthly range needed. Download those PDFs through Chase’s normal controls, then select all of them at once with **Import statement PDFs**. Each statement must reconcile exactly to Chase’s own purchase total before its normalized transactions are saved. Valid files are saved incrementally and duplicate imports do not duplicate spend. If Chase replaced or reissued the card, older PDFs may contain the prior card ending; the tracker requires one explicit confirmation before remembering that prior ending for this account. Parsing happens locally; raw PDFs are never persisted by the tracker.
 
 ### Business card
 
@@ -80,7 +80,7 @@ Pending transactions are excluded until they post. Partial Chase activity or Ult
 
 ## Privacy
 
-Neither userscript has analytics or sends tracker data to an external service. Data is stored separately for each tracker through Tampermonkey storage, or same-origin local storage during development. The optional Hyatt statement scan makes authenticated, same-origin requests only to Chase for PDFs the signed-in user selected by card and date.
+Neither userscript has analytics or sends tracker data to an external service. Data is stored separately for each tracker through Tampermonkey storage, or same-origin local storage during development. Hyatt statement PDFs selected by the user are parsed locally.
 
 Only normalized card and transaction fields are persisted: product name, last four digits, transaction date, description, amount, category, statement date coverage, and app-specific setup or points metadata. Raw responses, statement PDFs, Chase document keys, full card numbers, cookies, credentials, authentication tokens, and saved Chase HTML are never persisted by the userscripts.
 
@@ -97,9 +97,9 @@ apps/ink/    Ink product rules, calculations, Ultimate Rewards parsing, UI, and 
 apps/hyatt/  Hyatt product rules, calculations, setup, UI, and entry point
 ```
 
-The shared core is a build-time dependency. Each generated `.user.js` is self-contained. Hyatt’s PDF.js parser is declared as a version-pinned Tampermonkey `@resource`, so Tampermonkey caches it with the installed script instead of the tracker downloading executable code while processing statements. The parser is only initialized after the user starts a statement scan or imports PDFs. The trackers use separate storage keys and can be installed independently or together.
+The shared core is a build-time dependency. Each generated `.user.js` is self-contained. Hyatt’s PDF.js parser is declared as a version-pinned Tampermonkey `@resource`, so Tampermonkey caches it with the installed script instead of the tracker downloading executable code while processing statements. The parser is only initialized after the user imports PDFs. The trackers use separate storage keys and can be installed independently or together.
 
-The bundled PDF parser is Mozilla PDF.js 5.6.205 under Apache-2.0; its license is included in `vendor/pdfjs/` and the published distribution.
+The bundled PDF parser is Mozilla PDF.js 5.6.205 under Apache-2.0; its license is included in `vendor/pdfjs/` and the published distribution. The parser is only initialized after the user imports statement PDFs.
 
 ## Updates and releases
 

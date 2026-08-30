@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHyattDetailRows, displayAccountName, findHyattSetupTarget } from '../apps/hyatt/ui.js';
+import { buildHyattDetailRows, displayAccountName, findHyattSetupTarget, statementCoverageSummary } from '../apps/hyatt/ui.js';
 
 const metric = {
   account: { id: 'hyatt', last4: '1234' },
@@ -32,4 +32,27 @@ test('a completed refresh leads directly to the first card needing user setup', 
 test('Hyatt card names do not repeat an ASCII or Unicode masked ending', () => {
   assert.equal(displayAccountName('World of Hyatt Credit Card (...1111)'), 'World of Hyatt Credit Card');
   assert.equal(displayAccountName('World of Hyatt Credit Card (…1111)'), 'World of Hyatt Credit Card');
+});
+
+test('statement import guidance shows the exact bridge range and missing edges', () => {
+  const empty = statementCoverageSummary({
+    coverage: { activity: { earliest: '2025-06-20' }, statements: {} }
+  }, '2023-01-05');
+  assert.match(empty, /Needed statement range:<\/strong> Jan 2023 – Jun 2025/);
+  assert.match(empty, /No older statements imported yet/);
+
+  const partial = statementCoverageSummary({
+    coverage: {
+      activity: { earliest: '2025-06-20' },
+      statements: {
+        statementCount: 2,
+        earliest: '2023-02-01',
+        latest: '2025-05-31',
+        gaps: [{ after: '2023-02-28', before: '2025-05-01' }]
+      }
+    }
+  }, '2023-01-05');
+  assert.match(partial, /beginning months missing/);
+  assert.match(partial, /1 internal gap/);
+  assert.match(partial, /ending months missing/);
 });

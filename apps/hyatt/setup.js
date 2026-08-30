@@ -1,4 +1,5 @@
 import { formatDateOnly, parseDateOnly } from '../../packages/chase-core/lib/dates.js';
+import { normalizeLast4 } from '../../packages/chase-core/lib/normalize.js';
 import { getHyattProductRule } from './products.js';
 
 export function normalizeHyattSetup(account, input, existing = {}, asOf = new Date(), coverage = {}) {
@@ -19,6 +20,10 @@ export function normalizeHyattSetup(account, input, existing = {}, asOf = new Da
   const mode = input.historyMode;
   if (!['full', 'baseline', 'estimate'].includes(mode)) throw new Error('Choose an initialization method.');
   const config = { productId: rule.id, benefitStartDate, historyMode: mode };
+  const statementLast4Aliases = [...new Set((existing.statementLast4Aliases ?? [])
+    .map(normalizeLast4)
+    .filter((last4) => last4 && last4 !== normalizeLast4(account?.last4)))];
+  if (statementLast4Aliases.length) config.statementLast4Aliases = statementLast4Aliases;
 
   if (mode === 'full') {
     const statements = coverage.statements ?? {};

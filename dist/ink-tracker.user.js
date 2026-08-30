@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ink Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.1.8
+// @version      1.1.9
 // @description  Tracks Chase Ink bonus-category spend, anniversary caps, and verified or estimated points locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -937,34 +937,7 @@ async function syncAllCards(onProgress = () => {}, options = {}) {
 
 // ---- packages/chase-core/app/capture.js ----
 const INTERESTING_URL = /(account|activity|transaction|reward|earn|spend|card)/i;
-const REQUEST_CONTEXT_MARKER = '__chaseTrackerRequestContextV1';
 const ORIGINAL_FETCH_MARKER = '__chaseTrackerOriginalFetchV1';
-const DOCUMENT_AUTHORIZATION_PATH = '/svc/rr/documents/secure/idal/v2/dockey/list';
-
-function headerValue(headers, wantedName) {
-  if (!headers) return '';
-  try {
-    if (typeof headers.get === 'function') return String(headers.get(wantedName) ?? '').trim();
-  } catch {
-    // Fall through to the iterable/plain-object readers.
-  }
-  const wanted = wantedName.toLowerCase();
-  try {
-    for (const [name, value] of headers) {
-      if (String(name).toLowerCase() === wanted) return String(value ?? '').trim();
-    }
-  } catch {
-    // Some page-realm Headers objects are not iterable through the userscript proxy.
-  }
-  try {
-    for (const [name, value] of Object.entries(headers)) {
-      if (name.toLowerCase() === wanted) return String(value ?? '').trim();
-    }
-  } catch {
-    // Ignore header containers that cannot be enumerated.
-  }
-  return '';
-}
 
 function pageTarget(page = null) {
   return page ?? (typeof unsafeWindow !== 'undefined'
@@ -990,118 +963,11 @@ function defineHidden(target, key, value, writable = true) {
   }
 }
 
-function isChaseDocumentRequestUrl(value, method = 'POST') {
-  const raw = value?.url ?? value;
-  if (!raw) return false;
-  try {
-    const url = new URL(String(raw), typeof location !== 'undefined' ? location.href : 'https://secure.chase.com/');
-    return url.protocol === 'https:'
-      && /^secure(?:[0-9a-z-]+)?\.chase\.com$/i.test(url.hostname)
-      && url.pathname.toLowerCase() === DOCUMENT_AUTHORIZATION_PATH
-      && String(method || 'GET').toUpperCase() === 'POST';
-  } catch {
-    return false;
-  }
-}
-
-function requestBodyValue(body, wantedName) {
-  if (body == null) return '';
-  try {
-    if (typeof body.get === 'function') return String(body.get(wantedName) ?? '').trim();
-  } catch {
-    // Fall through to serialized form bodies.
-  }
-  if (typeof body !== 'string') return '';
-  try {
-    return String(new URLSearchParams(body).get(wantedName) ?? '').trim();
-  } catch {
-    return '';
-  }
-}
-
-function fetchRequestBody(input, init = {}) {
-  if (init && Object.prototype.hasOwnProperty.call(init, 'body') && init.body !== undefined) {
-    return Promise.resolve(init.body);
-  }
-  try {
-    const clone = input?.clone?.();
-    if (clone && typeof clone.text === 'function') return Promise.resolve(clone.text()).catch(() => undefined);
-  } catch {
-    // Request bodies are optional; header capture still works without one.
-  }
-  return Promise.resolve(undefined);
-}
-
-function extractChaseRequestContext(input, init = {}, capturedAt = Date.now(), body = undefined) {
-  const hasInitHeaders = init && Object.prototype.hasOwnProperty.call(init, 'headers')
-    && init.headers !== undefined;
-  const headers = hasInitHeaders ? init.headers : input?.headers;
-  const csrfToken = headerValue(headers, 'X-Jpmc-Csrf-Token');
-  const channel = headerValue(headers, 'X-Jpmc-Channel');
-  const clientRequestId = headerValue(headers, 'X-Jpmc-Client-Request-Id');
-  if (!csrfToken && !channel && !clientRequestId) return null;
-  return {
-    csrfToken,
-    channel,
-    clientRequestId,
-    requestedWith: headerValue(headers, 'X-Requested-With'),
-    dateFilterType: requestBodyValue(
-      body !== undefined ? body : init?.body,
-      'dateFilter.idalDateFilterType'
-    ),
-    capturedAt
-  };
-}
-
-function rememberChaseRequestContext(page, captured, requestUrl, method) {
-  if (!isChaseDocumentRequestUrl(requestUrl, method)) return;
-  if (!captured?.csrfToken || !captured.channel || !captured.clientRequestId) return;
-  let requestOrigin = '';
-  try {
-    requestOrigin = new URL(String(requestUrl), typeof location !== 'undefined' ? location.href : 'https://secure.chase.com/').origin;
-  } catch {
-    // The URL was already validated; this is only defensive.
-  }
-  const context = { ...captured, requestOrigin };
-  if (Object.prototype.hasOwnProperty.call(page, REQUEST_CONTEXT_MARKER)) {
-    try {
-      page[REQUEST_CONTEXT_MARKER] = context;
-      return;
-    } catch {
-      // Fall through and try defining a hidden marker.
-    }
-  }
-  defineHidden(page, REQUEST_CONTEXT_MARKER, context);
-}
-
-function chaseRequestContext(page = null) {
-  const target = pageTarget(page);
-  const context = target?.[REQUEST_CONTEXT_MARKER];
-  if (!context || typeof context !== 'object') return null;
-  return {
-    csrfToken: String(context.csrfToken ?? ''),
-    channel: String(context.channel ?? ''),
-    clientRequestId: String(context.clientRequestId ?? ''),
-    requestedWith: String(context.requestedWith ?? ''),
-    dateFilterType: String(context.dateFilterType ?? ''),
-    requestOrigin: String(context.requestOrigin ?? ''),
-    capturedAt: Number(context.capturedAt ?? 0)
-  };
-}
-
-function chasePageFetch(page = null) {
-  const target = pageTarget(page);
-  const rawFetch = target?.[ORIGINAL_FETCH_MARKER] ?? target?.fetch;
-  return typeof rawFetch === 'function' ? rawFetch.bind(target) : null;
-}
-
 function installChaseNetworkCapture(onNormalizedData, options = {}) {
   const page = pageTarget(options.page);
   if (!page) return { installed: false, error: 'Page context is unavailable.' };
   const marker = options.marker || '__chaseTrackerCaptureV1';
   const requestUrlKey = `${marker}Url`;
-  const requestMethodKey = `${marker}Method`;
-  const requestHeadersKey = `${marker}Headers`;
   const label = options.label || 'Chase Tracker';
   const normalizePayload = options.normalizePayload
     || ((payload, url) => extractNormalizedData(payload, url, options.normalizerOptions));
@@ -1127,13 +993,7 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
         defineHidden(page, ORIGINAL_FETCH_MARKER, originalFetch, false);
       }
       page.fetch = async function chaseTrackerFetch(...args) {
-        const requestUrl = args[0]?.url ?? args[0];
-        const requestMethod = String(args[1]?.method ?? args[0]?.method ?? 'GET').toUpperCase();
-        const capturedAt = Date.now();
-        const requestBody = fetchRequestBody(args[0], args[1]);
         const response = await originalFetch.apply(this, args);
-        const captured = extractChaseRequestContext(args[0], args[1], capturedAt, await requestBody);
-        if (response?.ok) rememberChaseRequestContext(page, captured, requestUrl ?? response.url, requestMethod);
         const url = args[0]?.url ?? args[0] ?? response.url;
         void inspect(response, url);
         return response;
@@ -1144,34 +1004,14 @@ function installChaseNetworkCapture(onNormalizedData, options = {}) {
     if (xhrPrototype) {
       const originalOpen = xhrPrototype.open;
       const originalSend = xhrPrototype.send;
-      const originalSetRequestHeader = xhrPrototype.setRequestHeader;
       xhrPrototype.open = function chaseTrackerOpen(method, url, ...rest) {
         this[requestUrlKey] = String(url);
-        this[requestMethodKey] = String(method ?? 'GET').toUpperCase();
-        this[requestHeadersKey] = {};
         return originalOpen.call(this, method, url, ...rest);
       };
-      xhrPrototype.setRequestHeader = function chaseTrackerSetRequestHeader(name, value) {
-        this[requestHeadersKey] ??= {};
-        this[requestHeadersKey][String(name)] = String(value);
-        return originalSetRequestHeader.call(this, name, value);
-      };
       xhrPrototype.send = function chaseTrackerSend(...args) {
-        const captured = extractChaseRequestContext(
-          null,
-          { headers: this[requestHeadersKey] },
-          Date.now(),
-          args[0]
-        );
         this.addEventListener('load', () => {
           try {
             if (this.status < 200 || this.status >= 300) return;
-            rememberChaseRequestContext(
-              page,
-              captured,
-              this[requestUrlKey],
-              this[requestMethodKey]
-            );
             if (!INTERESTING_URL.test(this[requestUrlKey])) return;
             const payload = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
             const normalized = normalizePayload(payload, this[requestUrlKey]);
@@ -1896,7 +1736,7 @@ function createInkTrackerUi(handlers) {
     <div class="backdrop" role="presentation">
       <section class="modal" role="dialog" aria-modal="true" aria-label="Ink Tracker">
         <header class="header">
-          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v1.1.8</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
+          <div class="brand"><strong>Ways to Earn — All Ink Cards</strong><span class="version">v1.1.9</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" aria-label="Created by Robo, @robo77 on Discord" title="@robo77 on Discord"><span>by Robo</span><svg viewBox="0 0 127.14 96.36" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83A97.68 97.68 0 0 0 49 6.83 72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15A77.7 77.7 0 0 0 39.6 87a68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2 20.89 9.77 43.56 9.77 64.2 0 .87.71 1.76 1.39 2.66 2A70.17 70.17 0 0 1 87.4 87a77.48 77.48 0 0 0 6.89 9.34 105.25 105.25 0 0 0 32.17-16.16C129.1 52.84 122 29.1 107.7 8.07ZM42.45 65.69c-9.95 0-18.11-9.11-18.11-20.35S32.3 25 42.45 25s18.27 9.19 18.1 20.34c0 11.24-8.04 20.35-18.1 20.35Zm42.24 0c-10 0-18.11-9.11-18.11-20.35S74.54 25 84.69 25 103 34.17 102.8 45.34c0 11.24-8.05 20.35-18.11 20.35Z"/></svg></a></div>
           <nav class="controls">
             <button data-view="summary" class="active">Summary</button>
             <button data-view="detail">Detailed</button>

@@ -1,4 +1,5 @@
 node_modules/
+.pnpm-store/
 *.log
 # Saved banking pages can contain private account and transaction data.
 chaseHTML/
