@@ -36,6 +36,19 @@ test('the shared Chase extractor selects Hyatt cards without admitting unrelated
   }]);
 });
 
+test('Chase abbreviated Hyatt Biz Visa name is classified as a business card', () => {
+  const html = `data-props="[[{&quot;value&quot;:&quot;Hyatt Biz Visa (...4444)&quot;},{&quot;accountId&quot;:444400,&quot;accountType&quot;:&quot;CARD&quot;,&quot;accountDetailType&quot;:&quot;BCC&quot;}]]"`;
+  assert.deepEqual(extractChaseAccounts(html, hyattOptions), [{
+    id: '444400',
+    name: 'Hyatt Biz Visa (...4444)',
+    last4: '4444',
+    accountType: 'CARD',
+    accountDetailType: 'BCC',
+    productId: 'hyatt-business',
+    source: 'chase-dom'
+  }]);
+});
+
 test('activity extraction records Chase end-of-history evidence', () => {
   const result = extractChaseActivity({
     querySelectorAll: () => [],

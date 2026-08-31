@@ -2,7 +2,10 @@ export const HYATT_PRODUCT_RULES = Object.freeze([
   {
     id: 'hyatt-business',
     type: 'business',
-    names: [/world\s+of\s+hyatt\s+business/i, /hyatt\s+business/i],
+    names: [
+      /world\s+of\s+hyatt\s+(?:business|biz)\b/i,
+      /hyatt\s+(?:business|biz)(?:\s+visa)?\b/i
+    ],
     label: 'World of Hyatt Business Credit Card',
     thresholdCents: 1_000_000,
     nightsPerThreshold: 5,
@@ -12,7 +15,7 @@ export const HYATT_PRODUCT_RULES = Object.freeze([
   {
     id: 'hyatt-personal',
     type: 'personal',
-    names: [/world\s+of\s+hyatt/i, /hyatt(?!\s+business)/i],
+    names: [/world\s+of\s+hyatt/i, /hyatt(?!\s+(?:business|biz)\b)/i],
     label: 'World of Hyatt Credit Card',
     thresholdCents: 500_000,
     nightsPerThreshold: 2,
@@ -30,7 +33,11 @@ export function identifyHyattProduct(accountOrName) {
 }
 
 export function getHyattProductRule(productId, fallbackName = '') {
-  return HYATT_PRODUCT_RULES.find((rule) => rule.id === productId) ?? identifyHyattProduct(fallbackName);
+  // Chase's current display name is more authoritative than a product ID saved by
+  // an older tracker version. This lets corrected matchers repair existing state.
+  return identifyHyattProduct(fallbackName)
+    ?? HYATT_PRODUCT_RULES.find((rule) => rule.id === productId)
+    ?? null;
 }
 
 export function isHyattAccount(account) {

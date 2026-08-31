@@ -90,6 +90,28 @@ test('business card earns five nights per calendar-year $10,000 and resets Janua
   assert.equal(metrics.yearHistoryVerified, true);
 });
 
+test('current Hyatt Biz name repairs a stale personal product classification', () => {
+  const renamedBusiness = {
+    id: 'renamed-business',
+    name: 'Hyatt Biz Visa (...3333)',
+    last4: '3333',
+    productId: 'hyatt-personal'
+  };
+  const metrics = calculateHyattCardMetrics(renamedBusiness, [
+    transaction(renamedBusiness, '2026-02-01', 1_000_000)
+  ], {
+    productId: 'hyatt-personal',
+    historyMode: 'full',
+    benefitStartDate: '2025-01-01',
+    historyConfirmed: true
+  }, { activity: { complete: true, earliest: '2026-01-01' } }, new Date('2026-08-31T12:00:00Z'));
+
+  assert.equal(metrics.rule.id, 'hyatt-business');
+  assert.equal(metrics.cardNightsYtd, 5);
+  assert.equal(metrics.baseNights, 0);
+  assert.equal(metrics.annualFreeNightThresholdCents, null);
+});
+
 test('business coverage is automatic when captured activity reaches January 1', () => {
   const metrics = calculateHyattCardMetrics(business, [
     transaction(business, '2025-12-20', 10_000),
