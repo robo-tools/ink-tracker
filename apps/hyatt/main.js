@@ -131,7 +131,7 @@ void (async function startHyattTracker() {
       await new Promise((resolve) => setTimeout(resolve, 450));
     },
 
-    async importStatementPdfs(files, accountId, benefitStartDate, progress) {
+    async importStatementPdfs(files, accountId, benefitStartDate, progress, confirmStatementAlias) {
       const account = state.accounts.find((item) => String(item.id) === String(accountId));
       if (!account) throw new Error('That Hyatt card is no longer available. Refresh and try again.');
       let savedCount = 0;
@@ -149,10 +149,7 @@ void (async function startHyattTracker() {
           const parsed = await parseStatementFileWithAliases(file, account, fallbackDate, {
             aliases,
             parsePdf: parseChaseStatementPdf,
-            confirmAlias: ({ priorLast4, selectedLast4 }) => confirm(
-              `This Chase PDF uses card ending …${priorLast4}, while the selected current card ends …${selectedLast4}. `
-              + `This commonly happens after a replacement or reissue. Confirm only if …${priorLast4} was an earlier number for this same card account. Remember it for future statement imports?`
-            )
+            confirmAlias: confirmStatementAlias
           });
           aliases = parsed.aliases;
           if (parsed.addedAlias) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hyatt Card Elite Night Tracker for Chase
 // @namespace    https://github.com/robo-tools/ink-tracker
-// @version      1.1.10
+// @version      1.1.11
 // @description  Tracks World of Hyatt personal and business card spend toward elite-night thresholds locally.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -1683,6 +1683,10 @@ function displayAccountName(name) {
   return String(name ?? 'World of Hyatt card').replace(/\s*\((?:\.{3}|…)[\s-]*\d{4}\)\s*$/u, '').trim();
 }
 
+function statementAliasConfirmationText(details = {}) {
+  return `This statement is for card ending …${details.priorLast4 ?? ''}, but the selected Hyatt card currently ends …${details.selectedLast4 ?? ''}. Did Chase replace or reissue this same card account?`;
+}
+
 function statusBadge(metric) {
   const status = metric.setupStatus;
   if (status === 'verified-full') return '<span class="badge good">✓ full history</span>';
@@ -1932,7 +1936,7 @@ const STYLES = `
   .launcher { position: fixed; right: 22px; bottom: 74px; z-index: 2147483645; border: 0; border-radius: 999px; padding: 11px 16px; background: #0b5363; color: #fff; font: 700 14px/1.2 system-ui,sans-serif; box-shadow: 0 6px 24px #001b3c55; cursor: pointer; }
   .launcher:hover { background: #073e4b; transform: translateY(-1px); }
   .backdrop { position: fixed; inset: 0; z-index: 2147483646; display: none; align-items: flex-start; justify-content: center; padding: min(4vh,34px) 18px; background: #07192f4d; font: 13px/1.42 Inter,"Open Sans",system-ui,sans-serif; color: #24282d; }
-  .backdrop.open { display: flex; } .modal { width: min(960px,calc(100vw - 24px)); max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #aab4c0; border-radius: 10px; background: #fff; box-shadow: 0 18px 55px #00142f55; }
+  .backdrop.open { display: flex; } .modal { position:relative; width: min(960px,calc(100vw - 24px)); max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #aab4c0; border-radius: 10px; background: #fff; box-shadow: 0 18px 55px #00142f55; }
   .header { min-height: 64px; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: linear-gradient(135deg,#0f5664,#123e72); color:#fff; }
   .brand { display:flex; align-items:baseline; gap:9px; margin-right:auto; min-width:250px; } .brand strong { font-size:14px; white-space:nowrap; } .version { font-size:10px; opacity:.65; }
   .creator { display:inline-flex; align-items:center; gap:3px; color:#fff; font-size:10px; opacity:.68; text-decoration:none; white-space:nowrap; } .creator:hover { opacity:1; text-decoration:underline; } .creator svg { width:11px; height:11px; fill:currentColor; }
@@ -1956,6 +1960,8 @@ const STYLES = `
   .setup-view { max-width:760px; margin:0 auto; padding:8px 0 18px; } .back-link { margin-bottom:10px; padding-left:0; border:0; background:none; color:#0d6374; } .setup-lead { margin:5px 0 16px; color:#626d77; } form { display:grid; gap:12px; } label { display:grid; gap:4px; color:#3f4a54; } label > span:first-child { font-weight:700; } .field-help { margin-bottom:3px; color:#68737f; font-size:11px; font-weight:400; line-height:1.4; } input,select { width:100%; padding:8px 9px; border:1px solid #bec8d2; border-radius:6px; background:#fff; color:#26323d; } .coverage-summary { padding:10px 12px; border-radius:7px; background:#eef6f7; color:#315b63; }
   .mode-panel { display:none; gap:10px; padding:12px; border:1px solid #dce3e7; border-radius:8px; } .mode-panel.active { display:grid; } .method-note { display:flex; justify-content:space-between; gap:15px; padding:9px 11px; border-radius:7px; background:#f1f6f7; } .method-note span { color:#65717c; text-align:right; } .method-note.warn { background:#fff6e6; } .check { grid-template-columns:auto 1fr; align-items:start; gap:8px; } .check input { width:auto; margin-top:3px; } .check span { font-weight:400; } .inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .setup-actions { display:flex; gap:8px; justify-content:flex-end; }
   .statement-backfill { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:11px; border:1px solid #ead3a5; border-radius:8px; background:#fff9ee; } .statement-backfill.complete { border-color:#bfdcc7; background:#f1f8f3; } .statement-backfill p { max-width:560px; margin-top:3px; color:#65717c; font-size:11px; } .statement-coverage { margin-top:6px; color:#6f5730; font-size:11px; } .statement-backfill.complete .statement-coverage { color:#2f6d41; } .statement-actions { display:grid; flex:none; gap:6px; min-width:170px; }
+  .decision-layer { position:absolute; inset:0; z-index:5; display:none; align-items:center; justify-content:center; padding:18px; background:#07192f80; } .decision-layer.show { display:flex; }
+  .decision-card { width:min(520px,100%); padding:18px; border:1px solid #bdc8d2; border-radius:10px; background:#fff; box-shadow:0 16px 40px #00142f55; } .decision-card h2 { color:#123e72; font-size:18px; } .decision-card p { margin-top:8px; color:#46535f; } .decision-note { padding:9px 10px; border-radius:7px; background:#fff6e6; color:#805000 !important; font-size:11px; } .decision-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:15px; }
   .debug-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding-top:8px; } .debug-grid section { padding:14px; border:1px solid #e0e4e8; border-radius:8px; } .debug-grid h2 { margin-bottom:8px; font-size:15px; } dl { margin:0; } dl div { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid #edf0f2; } dd { margin:0; font-weight:700; text-align:right; } .action-stack { display:grid; gap:7px; margin-top:10px; } .danger { border-color:#b44; color:#a22; } .wide { grid-column:1/-1; }
   @media (max-width:720px) { .backdrop { padding:8px; } .header { align-items:flex-start; flex-wrap:wrap; } .brand { width:100%; } .controls { width:100%; overflow-x:auto; } .card-title-row,.breakdown,.certificate > div:first-child,.method-note,.detail-heading,.setup-callout,.coverage-note,.statement-backfill { align-items:flex-start; flex-direction:column; } .statement-actions { width:100%; } .nights { text-align:left; } .inline-fields,.debug-grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
 `;
@@ -1966,9 +1972,14 @@ function createHyattTrackerUi(handlers) {
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLES}</style><button class="launcher" data-action="open">◆ Hyatt Tracker</button>
     <div class="backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-label="Hyatt Card Tracker">
-      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.10</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
+      <header class="header"><div class="brand"><strong>World of Hyatt Card Tracker</strong><span class="version">v1.1.11</span><a class="creator" href="https://discord.com/app" target="_blank" rel="noopener noreferrer" title="@robo77 on Discord"><span>by Robo</span>${DISCORD_ICON}</a></div>
       <nav class="controls"><button data-view="summary" class="active">Summary</button><button data-view="detail">Detailed</button><button data-action="sync">Refresh</button><button data-view="debug">Debug</button><button class="icon" data-action="close" aria-label="Close">×</button></nav></header>
       <div class="updated"></div><div class="status" role="status"></div><main class="body"></main>
+      <div class="decision-layer" data-alias-confirmation><section class="decision-card" role="alertdialog" aria-modal="true" aria-labelledby="hyatt-alias-title">
+        <h2 id="hyatt-alias-title">Confirm an earlier card number</h2><p data-alias-message></p>
+        <p class="decision-note">Choose Yes only if both endings belong to the same card account. The tracker will remember the earlier ending locally and continue the selected PDF batch.</p>
+        <div class="decision-actions"><button type="button" data-alias-choice="cancel">No, keep it rejected</button><button type="button" class="primary" data-alias-choice="accept">Yes, same card</button></div>
+      </section></div>
     </section></div><input type="file" accept=".csv,text/csv" multiple hidden data-file-input="csv"><input type="file" accept=".pdf,application/pdf" multiple hidden data-file-input="statements">`;
   document.documentElement.append(host);
 
@@ -1979,11 +1990,14 @@ function createHyattTrackerUi(handlers) {
   let captureStatus = null;
   let busy = false;
   let statementImportContext = null;
+  let pendingAliasConfirmation = null;
   const setupDraftDates = new Map();
   const backdrop = root.querySelector('.backdrop');
   const status = root.querySelector('.status');
   const fileInput = root.querySelector('[data-file-input="csv"]');
   const statementFileInput = root.querySelector('[data-file-input="statements"]');
+  const aliasConfirmation = root.querySelector('[data-alias-confirmation]');
+  const aliasMessage = root.querySelector('[data-alias-message]');
 
   function metrics() { return calculateAllHyattCards(state); }
   function activateModePanels() {
@@ -2004,6 +2018,24 @@ function createHyattTrackerUi(handlers) {
   }
   function showStatus(message, error = false) { status.textContent = message; status.classList.toggle('error', error); status.classList.add('show'); }
   function hideStatus() { status.classList.remove('show', 'error'); }
+  function settleAliasConfirmation(accepted) {
+    if (!pendingAliasConfirmation) return false;
+    const resolve = pendingAliasConfirmation;
+    pendingAliasConfirmation = null;
+    aliasConfirmation.classList.remove('show');
+    aliasMessage.textContent = '';
+    resolve(Boolean(accepted));
+    return true;
+  }
+  function requestAliasConfirmation(details) {
+    if (pendingAliasConfirmation) settleAliasConfirmation(false);
+    return new Promise((resolve) => {
+      pendingAliasConfirmation = resolve;
+      aliasMessage.textContent = statementAliasConfirmationText(details);
+      aliasConfirmation.classList.add('show');
+      aliasConfirmation.querySelector('[data-alias-choice="accept"]')?.focus();
+    });
+  }
   async function run(action, startMessage) {
     showStatus(startMessage);
     try { await action((message) => showStatus(message)); hideStatus(); return true; }
@@ -2017,6 +2049,10 @@ function createHyattTrackerUi(handlers) {
   root.addEventListener('click', async (event) => {
     const target = event.target.closest('button');
     if (!target) return;
+    if (target.dataset.aliasChoice) {
+      settleAliasConfirmation(target.dataset.aliasChoice === 'accept');
+      return;
+    }
     if (target.dataset.setup) { setupAccountId = target.dataset.setup; render(); return; }
     if (target.dataset.confirmYear) {
       const accountId = target.dataset.confirmYear;
@@ -2032,7 +2068,10 @@ function createHyattTrackerUi(handlers) {
     if (target.dataset.view) { setupAccountId = null; view = target.dataset.view; render(); return; }
     const action = target.dataset.action;
     if (action === 'open') { backdrop.classList.add('open'); render(); }
-    if (action === 'close') backdrop.classList.remove('open');
+    if (action === 'close') {
+      if (settleAliasConfirmation(false)) return;
+      backdrop.classList.remove('open');
+    }
     if (action === 'setup-back') { setupAccountId = null; view = 'summary'; render(); }
     if (action === 'sync') {
       busy = true;
@@ -2098,8 +2137,11 @@ function createHyattTrackerUi(handlers) {
     view = 'summary';
     render();
   });
-  backdrop.addEventListener('click', (event) => { if (event.target === backdrop) backdrop.classList.remove('open'); });
-  window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && backdrop.classList.contains('open')) backdrop.classList.remove('open'); });
+  backdrop.addEventListener('click', (event) => { if (event.target === backdrop && !pendingAliasConfirmation) backdrop.classList.remove('open'); });
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !backdrop.classList.contains('open')) return;
+    if (!settleAliasConfirmation(false)) backdrop.classList.remove('open');
+  });
   fileInput.addEventListener('change', async () => {
     for (const file of fileInput.files ?? []) await run((progress) => handlers.importCsv(file, progress), `Importing ${file.name}…`);
     fileInput.value = '';
@@ -2111,7 +2153,7 @@ function createHyattTrackerUi(handlers) {
     statementImportContext = null;
     if (!files.length || !context) return;
     await run(
-      (progress) => handlers.importStatementPdfs(files, context.accountId, context.benefitStartDate, progress),
+      (progress) => handlers.importStatementPdfs(files, context.accountId, context.benefitStartDate, progress, requestAliasConfirmation),
       `Verifying ${files.length} statement PDF${files.length === 1 ? '' : 's'}…`
     );
     render();
@@ -2249,7 +2291,7 @@ void (async function startHyattTracker() {
       await new Promise((resolve) => setTimeout(resolve, 450));
     },
 
-    async importStatementPdfs(files, accountId, benefitStartDate, progress) {
+    async importStatementPdfs(files, accountId, benefitStartDate, progress, confirmStatementAlias) {
       const account = state.accounts.find((item) => String(item.id) === String(accountId));
       if (!account) throw new Error('That Hyatt card is no longer available. Refresh and try again.');
       let savedCount = 0;
@@ -2267,10 +2309,7 @@ void (async function startHyattTracker() {
           const parsed = await parseStatementFileWithAliases(file, account, fallbackDate, {
             aliases,
             parsePdf: parseChaseStatementPdf,
-            confirmAlias: ({ priorLast4, selectedLast4 }) => confirm(
-              `This Chase PDF uses card ending …${priorLast4}, while the selected current card ends …${selectedLast4}. `
-              + `This commonly happens after a replacement or reissue. Confirm only if …${priorLast4} was an earlier number for this same card account. Remember it for future statement imports?`
-            )
+            confirmAlias: confirmStatementAlias
           });
           aliases = parsed.aliases;
           if (parsed.addedAlias) {

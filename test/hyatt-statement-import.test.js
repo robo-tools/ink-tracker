@@ -36,6 +36,23 @@ test('statement import asks once before accepting a prior card ending and retrie
   assert.deepEqual(parsed.aliases, ['9876']);
 });
 
+test('statement import waits for an asynchronous in-app confirmation', async () => {
+  let answer;
+  const parsedPromise = parseStatementFileWithAliases(file, account, '20240131', {
+    aliases: [],
+    parsePdf: async (_bytes, parseAccount) => {
+      if (!parseAccount.statementLast4Aliases.includes('9876')) throw mismatch();
+      return { statementDate: '2024-01-31' };
+    },
+    confirmAlias: () => new Promise((resolve) => { answer = resolve; })
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(typeof answer, 'function');
+  answer(true);
+  assert.equal((await parsedPromise).addedAlias, '9876');
+});
+
 test('statement import keeps a mismatched ending rejected when confirmation is declined', async () => {
   await assert.rejects(parseStatementFileWithAliases(file, account, '20240131', {
     parsePdf: async () => { throw mismatch(); },
