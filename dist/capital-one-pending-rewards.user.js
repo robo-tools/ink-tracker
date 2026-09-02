@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Capital One Shopping Pending Rewards Dashboard
 // @namespace    https://capitaloneshopping.com/
-// @version      1.2.1
+// @version      1.2.2
 // @description  Totals pending Shopping Rewards and charts their estimated payout schedule. Shopping Savings are excluded.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -520,6 +520,22 @@
       }
       #${DASHBOARD_ID} .c1pd-refresh:hover { background: var(--c1pd-blue-dark); }
       #${DASHBOARD_ID} .c1pd-refresh:disabled { cursor: wait; opacity: 0.6; }
+      #${DASHBOARD_ID} .c1pd-actions {
+        display: flex;
+        flex: 0 0 auto;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 5px;
+      }
+      #${DASHBOARD_ID} .c1pd-creator {
+        color: var(--c1pd-muted);
+        font-size: 11px;
+        text-decoration: none;
+      }
+      #${DASHBOARD_ID} .c1pd-creator:hover {
+        color: var(--c1pd-blue-dark);
+        text-decoration: underline;
+      }
       #${DASHBOARD_ID} .c1pd-stats {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -684,7 +700,17 @@
     const refresh = createElement('button', 'c1pd-refresh', 'Refresh');
     refresh.type = 'button';
     refresh.disabled = true;
-    header.append(titleWrap, refresh);
+
+    const creator = createElement('a', 'c1pd-creator', 'by Robo');
+    creator.href = 'https://discord.com/app';
+    creator.target = '_blank';
+    creator.rel = 'noopener noreferrer';
+    creator.title = '@robo77 on Discord';
+    creator.setAttribute('aria-label', 'Created by Robo, @robo77 on Discord');
+
+    const actions = createElement('div', 'c1pd-actions');
+    actions.append(refresh, creator);
+    header.append(titleWrap, actions);
 
     const content = createElement('div', 'c1pd-content');
     const footnote = createElement(

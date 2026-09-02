@@ -16,6 +16,12 @@ new Script(source, { filename: 'pending-rewards.user.js' }).runInNewContext({
 
 const { parseRouteDataFromSource, summarize } = userscriptModule.exports;
 
+test('includes unobtrusive linked Robo attribution', () => {
+  assert.match(source, /createElement\('a', 'c1pd-creator', 'by Robo'\)/);
+  assert.match(source, /creator\.href = 'https:\/\/discord\.com\/app'/);
+  assert.match(source, /Created by Robo, @robo77 on Discord/);
+});
+
 test('decodes Capital One React Router rewards data', () => {
   const flat = [
     { _1: 2 },
