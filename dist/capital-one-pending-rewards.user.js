@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Capital One Shopping Pending Rewards Dashboard
 // @namespace    https://capitaloneshopping.com/
-// @version      1.2.3
+// @version      1.2.4
 // @description  Totals pending Shopping Rewards and charts their estimated payout schedule. Shopping Savings are excluded.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -19,6 +19,7 @@
 
   const ROUTE_ID = 'routes/__app/my-rewards.lifetime-savings';
   const DASHBOARD_ID = 'c1pd-dashboard';
+  const SCRIPT_VERSION = '1.2.4';
   const PAGE_LIMIT = 100;
 
   /**
@@ -530,6 +531,15 @@
         color: var(--c1pd-blue-dark);
         text-decoration: underline;
       }
+      #${DASHBOARD_ID} .c1pd-credit {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 5px;
+        color: var(--c1pd-muted);
+        font-size: 11px;
+        white-space: nowrap;
+      }
       #${DASHBOARD_ID} .c1pd-stats {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -709,6 +719,9 @@
     creator.title = '@robo77 on Discord';
     creator.setAttribute('aria-label', 'Created by Robo, @robo77 on Discord');
 
+    const credit = createElement('div', 'c1pd-credit');
+    credit.append(creator, createElement('span', '', '·'), createElement('span', '', `v${SCRIPT_VERSION}`));
+
     header.append(titleWrap, refresh);
 
     const content = createElement('div', 'c1pd-content');
@@ -719,7 +732,7 @@
     );
 
     const footer = createElement('div', 'c1pd-footer');
-    footer.append(footnote, creator);
+    footer.append(footnote, credit);
     root.append(header, content, footer);
     return root;
   }

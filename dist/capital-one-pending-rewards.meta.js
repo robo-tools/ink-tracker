@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Capital One Shopping Pending Rewards Dashboard
 // @namespace    https://capitaloneshopping.com/
-// @version      1.2.3
+// @version      1.2.4
 // @description  Totals pending Shopping Rewards and charts their estimated payout schedule. Shopping Savings are excluded.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
