@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Capital One Shopping Pending Rewards Dashboard
 // @namespace    https://capitaloneshopping.com/
-// @version      1.2.2
+// @version      1.2.3
 // @description  Totals pending Shopping Rewards and charts their estimated payout schedule. Shopping Savings are excluded.
 // @author       Robo (@robo77 on Discord)
 // @homepageURL  https://github.com/robo-tools/ink-tracker
@@ -520,14 +520,8 @@
       }
       #${DASHBOARD_ID} .c1pd-refresh:hover { background: var(--c1pd-blue-dark); }
       #${DASHBOARD_ID} .c1pd-refresh:disabled { cursor: wait; opacity: 0.6; }
-      #${DASHBOARD_ID} .c1pd-actions {
-        display: flex;
-        flex: 0 0 auto;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 5px;
-      }
       #${DASHBOARD_ID} .c1pd-creator {
+        flex: 0 0 auto;
         color: var(--c1pd-muted);
         font-size: 11px;
         text-decoration: none;
@@ -649,8 +643,15 @@
         font-weight: 700;
         font-variant-numeric: tabular-nums;
       }
+      #${DASHBOARD_ID} .c1pd-footer {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 16px;
+      }
       #${DASHBOARD_ID} .c1pd-footnote {
-        margin: 16px 0 0;
+        margin: 0;
         color: var(--c1pd-muted);
         font-size: 12px;
       }
@@ -708,9 +709,7 @@
     creator.title = '@robo77 on Discord';
     creator.setAttribute('aria-label', 'Created by Robo, @robo77 on Discord');
 
-    const actions = createElement('div', 'c1pd-actions');
-    actions.append(refresh, creator);
-    header.append(titleWrap, actions);
+    header.append(titleWrap, refresh);
 
     const content = createElement('div', 'c1pd-content');
     const footnote = createElement(
@@ -719,7 +718,9 @@
       'Payout dates are estimates supplied by Capital One Shopping. Shopping Savings are excluded from every total.',
     );
 
-    root.append(header, content, footnote);
+    const footer = createElement('div', 'c1pd-footer');
+    footer.append(footnote, creator);
+    root.append(header, content, footer);
     return root;
   }
 
