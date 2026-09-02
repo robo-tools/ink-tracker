@@ -1,9 +1,9 @@
 {
   "name": "chase-card-tracker-userscripts",
-  "version": "1.1.11",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "Local-first Tampermonkey trackers for Chase Ink rewards and World of Hyatt card elite-night spend.",
+  "description": "Local-first Tampermonkey trackers for Chase cards and Capital One Shopping rewards.",
   "scripts": {
     "build": "node scripts/build.mjs",
     "check-built": "node scripts/check-built.mjs",

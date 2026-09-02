@@ -9,7 +9,8 @@ if (!releaseTag) throw new Error('Pass the release tag, for example: v1.0.0');
 const packageJson = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 const apps = [
   { id: 'ink-tracker', metadata: 'apps/ink/metadata.txt', ui: 'apps/ink/ui.js' },
-  { id: 'hyatt-tracker', metadata: 'apps/hyatt/metadata.txt', ui: 'apps/hyatt/ui.js' }
+  { id: 'hyatt-tracker', metadata: 'apps/hyatt/metadata.txt', ui: 'apps/hyatt/ui.js' },
+  { id: 'capital-one-pending-rewards', metadata: 'apps/capital-one/pending-rewards.user.js' }
 ];
 
 const version = packageJson.version;
@@ -20,15 +21,17 @@ const uiVersion = `<span class="version">v${version}</span>`;
 const checks = [[releaseTag === expectedTag, `tag ${releaseTag} does not match package version ${version}`]];
 for (const app of apps) {
   const metadata = await readFile(resolve(root, app.metadata), 'utf8');
-  const ui = await readFile(resolve(root, app.ui), 'utf8');
   const builtMetadata = await readFile(resolve(root, `dist/${app.id}.meta.js`), 'utf8');
   const builtUserscript = await readFile(resolve(root, `dist/${app.id}.user.js`), 'utf8');
   checks.push(
     [metadata.includes(versionLine), `${app.metadata} version does not match package.json`],
-    [ui.includes(uiVersion), `${app.ui} visible version does not match package.json`],
     [builtMetadata.includes(versionLine), `dist/${app.id}.meta.js version does not match package.json`],
     [builtUserscript.includes(versionLine), `dist/${app.id}.user.js version does not match package.json`]
   );
+  if (app.ui) {
+    const ui = await readFile(resolve(root, app.ui), 'utf8');
+    checks.push([ui.includes(uiVersion), `${app.ui} visible version does not match package.json`]);
+  }
 }
 
 const hyattMetadata = await readFile(resolve(root, 'apps/hyatt/metadata.txt'), 'utf8');

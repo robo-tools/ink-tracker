@@ -1,9 +1,10 @@
-# Chase Card Tracker Userscripts
+# Rewards Tracker Userscripts
 
-Two local-first Tampermonkey userscripts built on one shared Chase transaction core:
+Three local-first Tampermonkey userscripts:
 
 - **Ink Tracker** tracks Chase Ink bonus-category spend, cardmember-year caps, and verified or estimated Ultimate Rewards points.
 - **Hyatt Card Elite Night Tracker** tracks World of Hyatt personal and business card spend toward elite-night thresholds.
+- **Capital One Shopping Pending Rewards Dashboard** totals pending Shopping Rewards and charts their estimated payout schedule without counting Shopping Savings.
 
 Created by **Robo** ([@robo77](https://discord.com/app) on Discord).
 
@@ -11,8 +12,9 @@ Created by **Robo** ([@robo77](https://discord.com/app) on Discord).
 
 - [Install or update Ink Tracker](https://robo-tools.github.io/ink-tracker/ink-tracker.user.js)
 - [Install or update Hyatt Card Elite Night Tracker](https://robo-tools.github.io/ink-tracker/hyatt-tracker.user.js)
+- [Install or update Capital One Shopping Pending Rewards Dashboard](https://robo-tools.github.io/ink-tracker/capital-one-pending-rewards.user.js)
 
-After installation, sign in to Chase, open the Accounts dashboard, open the tracker using its floating button, and choose **Refresh**.
+For the Chase trackers, sign in to Chase, open the Accounts dashboard, open the tracker using its floating button, and choose **Refresh**.
 
 Both trackers visit each supported card’s Chase summary route, select **All transactions**, load every activity row Chase exposes, and restore the page where the refresh began. They stage the refresh and commit new totals only after every selected card completes.
 
@@ -63,6 +65,12 @@ The Hyatt tracker calculates card-derived qualifying nights. Nights from hotel s
 
 Chase and Hyatt make the final determination of qualifying purchases and benefits. The scripts exclude payments, pending charges, fees, and common cash-like transactions and subtract identified returns or refunds.
 
+## Capital One Shopping Pending Rewards Dashboard
+
+Open [My Rewards & Savings](https://capitaloneshopping.com/my-rewards/lifetime-savings) after installing the userscript. The dashboard loads every rewards page, totals only rows whose Shopping Rewards status is **Pending**, groups the estimated payout dates by month, and provides a transaction-level breakdown.
+
+The calculation uses Capital One Shopping's separate `rewardsAmount` field. It never adds coupon or Shopping Savings amounts, including when one transaction displays both rewards and savings. Payout dates are estimates supplied by Capital One Shopping.
+
 ## Accuracy and coverage
 
 The trackers distinguish among:
@@ -80,7 +88,7 @@ Pending transactions are excluded until they post. Partial Chase activity or Ult
 
 ## Privacy
 
-Neither userscript has analytics or sends tracker data to an external service. Data is stored separately for each tracker through Tampermonkey storage, or same-origin local storage during development. Hyatt statement PDFs selected by the user are parsed locally.
+None of the userscripts has analytics or sends tracker data to an external service. The Chase trackers store data separately through Tampermonkey storage, or same-origin local storage during development. The Capital One dashboard reads the signed-in rewards pages only when displayed and does not persist transaction data. Hyatt statement PDFs selected by the user are parsed locally.
 
 Only normalized card and transaction fields are persisted: product name, last four digits, transaction date, description, amount, category, statement date coverage, and app-specific setup or points metadata. Raw responses, statement PDFs, Chase document keys, full card numbers, cookies, credentials, authentication tokens, and saved Chase HTML are never persisted by the userscripts.
 
@@ -95,6 +103,7 @@ packages/chase-core/
 
 apps/ink/    Ink product rules, calculations, Ultimate Rewards parsing, UI, and entry point
 apps/hyatt/  Hyatt product rules, calculations, setup, UI, and entry point
+apps/capital-one/  Capital One Shopping pending-rewards dashboard
 ```
 
 The shared core is a build-time dependency. Each generated `.user.js` is self-contained. Hyatt’s PDF.js parser is declared as a version-pinned Tampermonkey `@resource`, so Tampermonkey caches it with the installed script instead of the tracker downloading executable code while processing statements. The parser is only initialized after the user imports PDFs. The trackers use separate storage keys and can be installed independently or together.
@@ -107,8 +116,9 @@ Tampermonkey checks the small `.meta.js` file for each installed tracker and dow
 
 - `dist/ink-tracker.meta.js` → `dist/ink-tracker.user.js`
 - `dist/hyatt-tracker.meta.js` → `dist/hyatt-tracker.user.js`
+- `dist/capital-one-pending-rewards.meta.js` → `dist/capital-one-pending-rewards.user.js`
 
-Development work belongs on `main`. A version tag such as `v1.0.0` runs all tests, builds both userscripts, verifies every version declaration, and publishes only `dist/` through GitHub Pages.
+Development work belongs on `main`. A version tag such as `v1.0.0` runs all tests, builds all userscripts, verifies every version declaration, and publishes only `dist/` through GitHub Pages.
 
 ## Development
 

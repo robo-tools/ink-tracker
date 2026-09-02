@@ -40,6 +40,10 @@ const apps = [
       'apps/hyatt/ui.js',
       'apps/hyatt/main.js'
     ]
+  },
+  {
+    id: 'capital-one-pending-rewards',
+    standalone: 'apps/capital-one/pending-rewards.user.js'
   }
 ];
 
@@ -65,6 +69,21 @@ for (const [source, destination] of vendorAssets) {
 }
 
 for (const app of apps) {
+  if (app.standalone) {
+    const output = await readFile(resolve(root, app.standalone), 'utf8');
+    const metadata = output.match(/^\/\/ ==UserScript==[\s\S]*?^\/\/ ==\/UserScript==/m)?.[0];
+    if (!metadata) throw new Error(`${app.standalone} is missing a userscript metadata block`);
+
+    const destination = resolve(root, `dist/${app.id}.user.js`);
+    const metadataDestination = resolve(root, `dist/${app.id}.meta.js`);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, output, 'utf8');
+    await writeFile(metadataDestination, `${metadata}\n`, 'utf8');
+    console.log(`Built ${destination} (${Buffer.byteLength(output).toLocaleString()} bytes)`);
+    console.log(`Built ${metadataDestination} (${Buffer.byteLength(metadata).toLocaleString()} bytes)`);
+    continue;
+  }
+
   const metadata = (await readFile(resolve(root, app.metadata), 'utf8')).trim();
   const bodies = [];
   for (const filename of app.sources) {
